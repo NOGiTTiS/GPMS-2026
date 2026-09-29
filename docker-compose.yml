@@ -1,0 +1,37 @@
+services:
+  backend:
+    build: ./backend
+    container_name: gpms-backend
+    restart: always
+    networks:
+      - tunorth-net
+    environment:
+      - DB_HOST=${DB_HOST:-gpms-db}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-hVLcvCI17kc.r6XZ}
+      - DB_NAME=${DB_NAME:-gpms}
+      - DB_PORT=${DB_PORT:-5432}
+      - PORT=8080
+      - DB_SSL=disable
+      - JWT_SECRET=${JWT_SECRET:-gpms-super-secret-key-change-in-production}
+      - FRONTEND_URL=${FRONTEND_URL:-https://gpms.tn.ac.th}
+    volumes:
+      - ../../data/uploads/gpms:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://gpms.tn.ac.th}
+    container_name: gpms-frontend
+    restart: always
+    networks:
+      - tunorth-net
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://gpms.tn.ac.th}
+    depends_on:
+      - backend
+
+networks:
+  tunorth-net:
+    external: true

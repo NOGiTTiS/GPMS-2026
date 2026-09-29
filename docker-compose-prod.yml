@@ -1,0 +1,39 @@
+services:
+  backend:
+    build: ./backend
+    container_name: gpms-backend
+    restart: always
+    networks:
+      - tunorth-net
+    environment:
+      - DB_HOST=shared-postgres     # <-- ชื่อ Container DB หลักที่รันอยู่บนเซิร์ฟเวอร์ (เช่น shared-postgres)
+      - DB_USER=postgres            # <-- ชื่อผู้ใช้ DB หลัก
+      - DB_PASSWORD=hVLcvCI17kc.r6XZ        # <-- รหัสผ่าน DB หลัก (เปลี่ยนให้ตรงกับเซิร์ฟเวอร์จริง)
+      - DB_NAME=gpms                 # <-- ชื่อฐานข้อมูลที่ใช้งาน
+      - DB_PORT=5432
+      - PORT=8080
+      - DB_SSL=disable              # <-- ปิด SSL ในระบบเครือข่าย Docker
+      - JWT_SECRET=gpms-super-secret-key-change-in-production # <-- JWT Secret (ควรเปลี่ยนเพื่อความปลอดภัย)
+      - FRONTEND_URL=https://gpms.tn.ac.th
+    volumes:
+      # Map โฟลเดอร์ uploads ออกมาข้างนอก เพื่อไม่ให้ไฟล์สูญหายและจัดการสิทธิ์ง่ายขึ้น
+      - ./backend/uploads:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # กำหนด Domain หลักที่ชี้มาจาก Cloudflare
+        - NEXT_PUBLIC_API_URL=https://gpms.tn.ac.th
+    container_name: gpms-frontend
+    restart: always
+    networks:
+      - tunorth-net
+    environment:
+      - NEXT_PUBLIC_API_URL=https://gpms.tn.ac.th
+    depends_on:
+      - backend
+
+networks:
+  tunorth-net:
+    external: true
