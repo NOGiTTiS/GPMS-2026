@@ -42,14 +42,17 @@ export interface Workload {
   max_score: number;
   sample_file_path?: string;
   sample_link_url?: string;
+  type?: "individual" | "group";
 }
 
 export interface Submission {
   id: number;
   workload_id: number;
   workload?: Workload;
-  group_id: number;
+  group_id?: number | null;
   group?: Group;
+  student_id?: number;
+  student?: User;
   submitted_by_id: number;
   submitted_by?: User;
   file_path: string;

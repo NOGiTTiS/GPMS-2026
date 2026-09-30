@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import WorkloadOverview from "../../components/WorkloadOverview";
 import ExportScoreDialog from "../../components/ExportScoreDialog";
 import { 
-  Calendar, Layers, Users, Briefcase, Award, Settings, 
+  Calendar, Layers, Users, User as UserIcon, Briefcase, Award, Settings, 
   Plus, Edit, Trash, Upload, Check, X, ShieldAlert, Download, FileSpreadsheet, LayoutGrid,
   Image as ImageIcon, Link as LinkIcon, ExternalLink, Printer
 } from "lucide-react";
@@ -100,7 +100,8 @@ export default function AdminPage() {
     max_score: 10, 
     semester_id: 0,
     sample_file_path: "",
-    sample_link_url: ""
+    sample_link_url: "",
+    type: "group" as "individual" | "group"
   });
   const [uploadingSampleFile, setUploadingSampleFile] = useState(false);
   // 5. Criteria
@@ -1341,7 +1342,8 @@ export default function AdminPage() {
                         max_score: 10, 
                         semester_id: currentViewingSem ? currentViewingSem.id : 0,
                         sample_file_path: "",
-                        sample_link_url: ""
+                        sample_link_url: "",
+                        type: "group"
                       });
                       setOpenWorkloadDialog(true);
                     }}
@@ -1388,7 +1390,22 @@ export default function AdminPage() {
 
                         return paginatedWorkloads.map((wl) => (
                           <TableRow key={wl.id} className="border-slate-100 hover:bg-slate-50/30">
-                            <TableCell className="font-semibold text-slate-700">{wl.title}</TableCell>
+                            <TableCell className="font-semibold text-slate-700">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <span>{wl.title}</span>
+                                  {wl.type === "individual" ? (
+                                    <span className="px-2 py-0.5 text-[10px] font-bold bg-blue-100 text-blue-700 rounded-full border border-blue-200">
+                                      งานเดี่ยว
+                                    </span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 text-[10px] font-bold bg-emerald-100 text-emerald-700 rounded-full border border-emerald-200">
+                                      งานกลุ่ม
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </TableCell>
                             <TableCell className="text-slate-500 text-sm max-w-xs">
                               <div className="truncate">{wl.description || "-"}</div>
                               {(wl.sample_file_path || wl.sample_link_url) && (
@@ -1433,7 +1450,8 @@ export default function AdminPage() {
                                     max_score: wl.max_score,
                                     semester_id: wl.semester_id,
                                     sample_file_path: wl.sample_file_path || "",
-                                    sample_link_url: wl.sample_link_url || ""
+                                    sample_link_url: wl.sample_link_url || "",
+                                    type: wl.type || "group"
                                   });
                                   setOpenWorkloadDialog(true);
                                 }}
@@ -2470,6 +2488,40 @@ export default function AdminPage() {
             <DialogTitle>{editingWorkload ? "แก้ไขภาระงาน" : "สร้างภาระงานใหม่"}</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleWorkloadSubmit} className="space-y-4 pt-2">
+            <div className="space-y-2">
+              <label className="text-xs text-slate-500 font-semibold uppercase tracking-wider">รูปแบบภาระงาน</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setWorkloadForm({ ...workloadForm, type: "individual" })}
+                  className={`px-3 py-2 text-xs font-semibold rounded-xl border flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                    workloadForm.type === "individual"
+                      ? "bg-blue-50 border-blue-500 text-blue-700 shadow-sm"
+                      : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  <UserIcon className="h-4 w-4 text-blue-600" />
+                  <span>งานเดี่ยว (ครึ่งแรก)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWorkloadForm({ ...workloadForm, type: "group" })}
+                  className={`px-3 py-2 text-xs font-semibold rounded-xl border flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                    workloadForm.type === "group"
+                      ? "bg-emerald-50 border-emerald-500 text-emerald-700 shadow-sm"
+                      : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  <Users className="h-4 w-4 text-emerald-600" />
+                  <span>งานกลุ่ม (ครึ่งหลัง)</span>
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                {workloadForm.type === "individual" 
+                  ? "• นักเรียนส่งงานเดี่ยวได้ทันทีโดยไม่ต้องจัดตั้งกลุ่ม" 
+                  : "• ตัวแทนกลุ่มเป็นผู้ส่งงาน และสมาชิกในกลุ่มทุกคนจะได้รับคะแนนร่วมกัน"}
+              </p>
+            </div>
             <div className="space-y-2">
               <label className="text-xs text-slate-500">ชื่อภาระงาน (เช่น ส่งรายงานความก้าวหน้า 1)</label>
               <Input 

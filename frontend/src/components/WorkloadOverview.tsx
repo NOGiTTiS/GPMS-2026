@@ -368,10 +368,21 @@ export default function WorkloadOverview() {
                     className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between hover:border-slate-700 transition-all"
                   >
                     <div>
-                      <div className="flex items-start justify-between gap-2 mb-1.5">
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-tu-pink/10 text-tu-pink border border-tu-pink/20 uppercase tracking-wide">
-                          ภาระงานที่ {idx + 1}
-                        </span>
+                      <div className="flex items-start justify-between gap-2 mb-1.5 flex-wrap">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-tu-pink/10 text-tu-pink border border-tu-pink/20 uppercase tracking-wide">
+                            ภาระงานที่ {idx + 1}
+                          </span>
+                          {wl.type === "individual" ? (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                              งานเดี่ยว
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                              งานกลุ่ม
+                            </span>
+                          )}
+                        </div>
                         <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                           {wl.max_score} คะแนนเต็ม
                         </span>
@@ -586,9 +597,14 @@ export default function WorkloadOverview() {
                           <span className="truncate max-w-[120px]" title={wl.title}>
                             {idx + 1}. {wl.title}
                           </span>
-                          <span className="text-[10px] text-slate-400 font-normal">
-                            ({wl.max_score} คะแนน)
-                          </span>
+                          <div className="flex items-center gap-1 text-[10px] text-slate-400 font-normal mt-0.5">
+                            <span>({wl.max_score} คะแนน)</span>
+                            {wl.type === "individual" ? (
+                              <span className="text-[9px] px-1 bg-blue-500/20 text-blue-300 rounded border border-blue-500/30">เดี่ยว</span>
+                            ) : (
+                              <span className="text-[9px] px-1 bg-emerald-500/20 text-emerald-300 rounded border border-emerald-500/30">กลุ่ม</span>
+                            )}
+                          </div>
                         </div>
                       </TableHead>
                     ))}

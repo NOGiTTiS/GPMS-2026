@@ -107,6 +107,7 @@ func SetupRoutes(app *fiber.App) {
 	student.Get("/student/groups/my", controllers.GetMyGroup)
 	student.Get("/student/classmates", controllers.GetClassmates)
 	student.Get("/student/classrooms", controllers.GetStudentClassrooms)
+	student.Get("/student/submissions/my", controllers.GetMySubmissions)
 	student.Post("/student/submissions/workload", controllers.SubmitWorkload)
 	student.Post("/student/submissions/final", controllers.SubmitFinalProject)
 

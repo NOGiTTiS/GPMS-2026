@@ -57,6 +57,10 @@ func InitDB() *gorm.DB {
 		log.Fatalf("Database migration failed: %v", err)
 	}
 
+	// Ensure group_id can be null in submissions and backfill student_id for individual workload support
+	DB.Exec("ALTER TABLE submissions ALTER COLUMN group_id DROP NOT NULL;")
+	DB.Exec("UPDATE submissions SET student_id = submitted_by_id WHERE student_id = 0 OR student_id IS NULL;")
+
 	log.Println("Database migration completed")
 
 	// Seed Admin and default configurations

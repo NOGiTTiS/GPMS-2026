@@ -429,11 +429,6 @@ func SubmitWorkload(c *fiber.Ctx) error {
 	userID := c.Locals("userID").(uint)
 	semesterID, _ := getActiveSemesterID()
 
-	group, err := getStudentGroup(userID, semesterID)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "You don't belong to any group"})
-	}
-
 	input := new(SubmitWorkloadInput)
 	if err := c.BodyParser(input); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -447,35 +442,116 @@ func SubmitWorkload(c *fiber.Ctx) error {
 	// Determine if late
 	isLate := time.Now().After(wl.Deadline)
 
-	var submission models.Submission
-	// Check if already submitted
-	err = config.DB.Where("workload_id = ? AND group_id = ?", wl.ID, group.ID).First(&submission).Error
-	
 	var user models.User
 	config.DB.First(&user, userID)
 
+	var student models.Student
+	config.DB.Preload("Classroom").Where("user_id = ?", userID).First(&student)
+
+	lateText := ""
+	if isLate {
+		lateText = " ⚠️ (ส่งล่าช้า)"
+	}
+	
+	attachLabel := "ลิงก์แนบ"
+	attachVal := input.LinkURL
+	if attachVal == "" && input.FilePath != "" {
+		attachLabel = "ไฟล์แนบ"
+		attachVal = input.FilePath
+	}
+
+	var submission models.Submission
 	tx := config.DB.Begin()
 
+	// Check if this workload is individual or group
+	if wl.Type == models.WorkloadTypeIndividual {
+		// INDIVIDUAL WORKLOAD: Does not require a group
+		err := tx.Where("workload_id = ? AND student_id = ? AND group_id IS NULL", wl.ID, userID).First(&submission).Error
+		if err == gorm.ErrRecordNotFound {
+			submission = models.Submission{
+				WorkloadID:    wl.ID,
+				GroupID:       nil,
+				StudentID:     userID,
+				SubmittedByID: userID,
+				FilePath:      input.FilePath,
+				LinkURL:       input.LinkURL,
+				SubmittedAt:   time.Now(),
+				IsLate:        isLate,
+			}
+			if err := tx.Create(&submission).Error; err != nil {
+				tx.Rollback()
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save submission"})
+			}
+		} else {
+			submission.SubmittedByID = userID
+			submission.FilePath = input.FilePath
+			submission.LinkURL = input.LinkURL
+			submission.SubmittedAt = time.Now()
+			submission.IsLate = isLate
+			if err := tx.Save(&submission).Error; err != nil {
+				tx.Rollback()
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update submission"})
+			}
+		}
+
+		tx.Commit()
+
+		className := "-"
+		if student.Classroom.Name != "" {
+			className = student.Classroom.Name
+		}
+
+		telegramMessage := fmt.Sprintf(
+			"🔔 <b>ส่งภาระงานเดี่ยวใหม่!</b>\n\n"+
+				"<b>นักเรียน:</b> %s\n"+
+				"<b>ห้องเรียน:</b> %s\n"+
+				"<b>ภาระงาน:</b> %s (งานเดี่ยว)\n"+
+				"<b>เวลาที่ส่ง:</b> %s%s\n"+
+				"<b>%s:</b> %s",
+			user.FullName, className, wl.Title,
+			time.Now().Format("02-01-2006 15:04"), lateText, attachLabel, attachVal,
+		)
+		telegram.NotifyAdmin(telegramMessage)
+		telegram.NotifyStudent(telegramMessage)
+
+		return c.JSON(submission)
+	}
+
+	// GROUP WORKLOAD: Requires belonging to a group
+	group, err := getStudentGroup(userID, semesterID)
+	if err != nil {
+		tx.Rollback()
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "ภาระงานนี้เป็นงานกลุ่ม กรุณาจัดตั้งหรือเข้าร่วมกลุ่มก่อนนำส่งงาน"})
+	}
+
+	err = tx.Where("workload_id = ? AND group_id = ?", wl.ID, group.ID).First(&submission).Error
 	if err == gorm.ErrRecordNotFound {
-		// Create new
 		submission = models.Submission{
 			WorkloadID:    wl.ID,
-			GroupID:       group.ID,
+			GroupID:       &group.ID,
+			StudentID:     userID,
 			SubmittedByID: userID,
 			FilePath:      input.FilePath,
 			LinkURL:       input.LinkURL,
 			SubmittedAt:   time.Now(),
 			IsLate:        isLate,
 		}
-		tx.Create(&submission)
+		if err := tx.Create(&submission).Error; err != nil {
+			tx.Rollback()
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save submission"})
+		}
 	} else {
-		// Update existing
+		submission.GroupID = &group.ID
+		submission.StudentID = userID
 		submission.SubmittedByID = userID
 		submission.FilePath = input.FilePath
 		submission.LinkURL = input.LinkURL
 		submission.SubmittedAt = time.Now()
 		submission.IsLate = isLate
-		tx.Save(&submission)
+		if err := tx.Save(&submission).Error; err != nil {
+			tx.Rollback()
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update submission"})
+		}
 	}
 
 	// Log activity
@@ -496,25 +572,12 @@ func SubmitWorkload(c *fiber.Ctx) error {
 
 	tx.Commit()
 
-	// Telegram Notification
-	lateText := ""
-	if isLate {
-		lateText = " ⚠️ (ส่งล่าช้า)"
-	}
-	
-	attachLabel := "ลิงก์แนบ"
-	attachVal := submission.LinkURL
-	if attachVal == "" && submission.FilePath != "" {
-		attachLabel = "ไฟล์แนบ"
-		attachVal = submission.FilePath
-	}
-
 	telegramMessage := fmt.Sprintf(
 		"🔔 <b>ส่งภาระงานกลุ่มใหม่!</b>\n\n"+
 			"<b>กลุ่ม:</b> %s\n"+
 			"<b>ห้องเรียน:</b> %s\n"+
 			"<b>หัวข้อ:</b> %s\n"+
-			"<b>ภาระงาน:</b> %s\n"+
+			"<b>ภาระงาน:</b> %s (งานกลุ่ม)\n"+
 			"<b>ผู้ส่ง:</b> %s\n"+
 			"<b>เวลาที่ส่ง:</b> %s%s\n"+
 			"<b>%s:</b> %s",
@@ -525,6 +588,40 @@ func SubmitWorkload(c *fiber.Ctx) error {
 	telegram.NotifyStudent(telegramMessage)
 
 	return c.JSON(submission)
+}
+
+func GetMySubmissions(c *fiber.Ctx) error {
+	userID := c.Locals("userID").(uint)
+	semesterID, err := getActiveSemesterID()
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	// 1. Fetch individual submissions by this student
+	var individualSubs []models.Submission
+	config.DB.
+		Preload("Workload").
+		Preload("Grade.GradedBy").
+		Joins("JOIN workloads ON workloads.id = submissions.workload_id").
+		Where("submissions.student_id = ? AND submissions.group_id IS NULL AND workloads.semester_id = ?", userID, semesterID).
+		Find(&individualSubs)
+
+	// 2. Fetch group submissions if student belongs to a group
+	var groupSubs []models.Submission
+	group, _ := getStudentGroup(userID, semesterID)
+	if group != nil {
+		config.DB.
+			Preload("Workload").
+			Preload("Grade.GradedBy").
+			Preload("SubmittedBy").
+			Where("submissions.group_id = ?", group.ID).
+			Find(&groupSubs)
+	}
+
+	return c.JSON(fiber.Map{
+		"individual_submissions": individualSubs,
+		"group_submissions":      groupSubs,
+	})
 }
 
 // ==========================================

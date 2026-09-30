@@ -29,7 +29,7 @@ func GradeWorkload(c *fiber.Ctx) error {
 
 	// Verify submission exists
 	var sub models.Submission
-	if err := config.DB.Preload("Group").Preload("Workload").First(&sub, input.SubmissionID).Error; err != nil {
+	if err := config.DB.Preload("Group").Preload("Workload").Preload("Student").Preload("SubmittedBy").First(&sub, input.SubmissionID).Error; err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Submission not found"})
 	}
 
@@ -58,26 +58,38 @@ func GradeWorkload(c *fiber.Ctx) error {
 		tx.Save(&grade)
 	}
 
-	// Log group activity
-	log := models.GroupActivityLog{
-		GroupID:     sub.GroupID,
-		ActionByID:  teacherID,
-		ActionType:  "GRADING",
-		Description: fmt.Sprintf("ตรวจให้คะแนนภาระงาน '%s': ได้ %.2f คะแนน โดยครู %s", sub.Workload.Title, grade.Score, teacher.FullName),
+	// Log group activity if it's a group submission
+	if sub.GroupID != nil {
+		log := models.GroupActivityLog{
+			GroupID:     *sub.GroupID,
+			ActionByID:  teacherID,
+			ActionType:  "GRADING",
+			Description: fmt.Sprintf("ตรวจให้คะแนนภาระงาน '%s': ได้ %.2f คะแนน โดยครู %s", sub.Workload.Title, grade.Score, teacher.FullName),
+		}
+		tx.Create(&log)
 	}
-	tx.Create(&log)
 
 	tx.Commit()
 
 	// Telegram Notification
+	targetLabel := "นักเรียน"
+	targetName := sub.Student.FullName
+	if sub.Group != nil && sub.Group.Name != "" {
+		targetLabel = "กลุ่ม"
+		targetName = sub.Group.Name
+	}
+	if targetName == "" {
+		targetName = fmt.Sprintf("รหัสนักเรียน %d", sub.StudentID)
+	}
+
 	telegramMessage := fmt.Sprintf(
 		"📝 <b>ตรวจงานเสร็จสิ้นแล้ว!</b>\n\n"+
-			"<b>กลุ่ม:</b> %s\n"+
+			"<b>%s:</b> %s\n"+
 			"<b>ภาระงาน:</b> %s\n"+
 			"<b>ผู้ประเมิน:</b> %s\n"+
 			"<b>คะแนนที่ได้:</b> %.2f / %.2f\n"+
 			"<b>ความเห็นเพิ่มเติม:</b> %s",
-		sub.Group.Name, sub.Workload.Title, teacher.FullName, grade.Score, sub.Workload.MaxScore, grade.Comment,
+		targetLabel, targetName, sub.Workload.Title, teacher.FullName, grade.Score, sub.Workload.MaxScore, grade.Comment,
 	)
 	telegram.NotifyStudent(telegramMessage)
 	telegram.NotifyAdmin(telegramMessage)
@@ -247,17 +259,35 @@ func GetSubmissionsToGrade(c *fiber.Ctx) error {
 		return c.JSON([]models.Submission{})
 	}
 
-	var submissions []models.Submission
+	var groupSubs []models.Submission
 	config.DB.
 		Preload("Group").
 		Preload("Group.Classroom").
+		Preload("Group.Members").
+		Preload("Student").
+		Preload("SubmittedBy").
 		Preload("Workload").
 		Preload("Grade").
 		Joins("JOIN groups ON groups.id = submissions.group_id").
 		Where("groups.classroom_id IN ? AND groups.semester_id = ?", classroomIDs, semesterID).
-		Find(&submissions)
+		Order("submissions.submitted_at desc").
+		Find(&groupSubs)
 
-	return c.JSON(submissions)
+	var indivSubs []models.Submission
+	config.DB.
+		Preload("Student").
+		Preload("SubmittedBy").
+		Preload("Workload").
+		Preload("Grade").
+		Joins("JOIN workloads ON workloads.id = submissions.workload_id").
+		Joins("JOIN students ON students.user_id = submissions.student_id").
+		Where("submissions.group_id IS NULL AND students.classroom_id IN ? AND workloads.semester_id = ?", classroomIDs, semesterID).
+		Order("submissions.submitted_at desc").
+		Find(&indivSubs)
+
+	allSubmissions := append(groupSubs, indivSubs...)
+
+	return c.JSON(allSubmissions)
 }
 
 func GetFinalProjectsToGrade(c *fiber.Ctx) error {

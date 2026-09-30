@@ -214,6 +214,27 @@ func ExportScoresExcel(c *fiber.Ctx) error {
 		classroomGroupsMap[g.ClassroomID] = append(classroomGroupsMap[g.ClassroomID], data)
 	}
 
+	// 5.1 Fetch individual submissions for this semester
+	var indivSubs []models.Submission
+	config.DB.
+		Preload("Grade").
+		Joins("JOIN workloads ON workloads.id = submissions.workload_id").
+		Where("submissions.group_id IS NULL AND workloads.semester_id = ?", semesterID).
+		Find(&indivSubs)
+
+	indivScores := make(map[uint]map[uint]float64)
+	indivGraded := make(map[uint]map[uint]bool)
+	for _, sub := range indivSubs {
+		if indivScores[sub.StudentID] == nil {
+			indivScores[sub.StudentID] = make(map[uint]float64)
+			indivGraded[sub.StudentID] = make(map[uint]bool)
+		}
+		if sub.Grade != nil {
+			indivScores[sub.StudentID][sub.WorkloadID] = sub.Grade.Score
+			indivGraded[sub.StudentID][sub.WorkloadID] = true
+		}
+	}
+
 	// 6. Initialize Excelize file
 	f := excelize.NewFile()
 	defer func() {
@@ -372,7 +393,11 @@ func ExportScoresExcel(c *fiber.Ctx) error {
 
 		// Workload columns
 		for _, wl := range workloads {
-			headers = append(headers, fmt.Sprintf("%s\n(เต็ม %.2f)", wl.Title, wl.MaxScore))
+			typeLabel := "งานกลุ่ม"
+			if wl.Type == models.WorkloadTypeIndividual {
+				typeLabel = "งานเดี่ยว"
+			}
+			headers = append(headers, fmt.Sprintf("%s (%s)\n(เต็ม %.2f)", wl.Title, typeLabel, wl.MaxScore))
 		}
 		headers = append(headers, "รวมคะแนนย่อย")
 
@@ -441,9 +466,35 @@ func ExportScoresExcel(c *fiber.Ctx) error {
 						}
 					}
 
+					// Calculate student-specific scores for individual vs group workloads
+					studentWlScores := make([]float64, len(workloads))
+					studentAccumulated := 0.0
+					studentGradedCount := 0
+					for wIdx, wl := range workloads {
+						if wl.Type == models.WorkloadTypeIndividual {
+							score := 0.0
+							if sMap, ok := indivScores[m.ID]; ok {
+								score = sMap[wl.ID]
+							}
+							studentWlScores[wIdx] = score
+							if gMap, ok := indivGraded[m.ID]; ok && gMap[wl.ID] {
+								studentGradedCount++
+							}
+							studentAccumulated += score
+						} else {
+							score := item.WorkloadScores[wIdx]
+							studentWlScores[wIdx] = score
+							if item.WorkloadGraded[wIdx] {
+								studentGradedCount++
+							}
+							studentAccumulated += score
+						}
+					}
+					studentTotalScore := studentAccumulated + item.FinalProjectScore
+
 					colOffset := len(baseCols)
 					// Workload scores
-					for wIdx, score := range item.WorkloadScores {
+					for wIdx, score := range studentWlScores {
 						cell, _ := excelize.CoordinatesToCellName(colOffset+wIdx+1, currentRow)
 						f.SetCellValue(sheetName, cell, score)
 						f.SetCellStyle(sheetName, cell, cell, dataNumberStyle)
@@ -452,7 +503,7 @@ func ExportScoresExcel(c *fiber.Ctx) error {
 
 					// Accumulated workload score
 					accCell, _ := excelize.CoordinatesToCellName(colOffset+1, currentRow)
-					f.SetCellValue(sheetName, accCell, item.AccumulatedScore)
+					f.SetCellValue(sheetName, accCell, studentAccumulated)
 					f.SetCellStyle(sheetName, accCell, accCell, dataNumberStyle)
 					colOffset += 1
 
@@ -478,13 +529,13 @@ func ExportScoresExcel(c *fiber.Ctx) error {
 
 					// คะแนนรวมสุทธิ
 					totCell, _ := excelize.CoordinatesToCellName(colOffset+1, currentRow)
-					f.SetCellValue(sheetName, totCell, item.TotalScore)
+					f.SetCellValue(sheetName, totCell, studentTotalScore)
 					f.SetCellStyle(sheetName, totCell, totCell, dataTotalScoreStyle)
 					colOffset += 1
 
 					// Status
-					statusText := fmt.Sprintf("ตรวจแล้ว (%d/%d)", item.GradedCount, item.TotalWorkloads)
-					if item.TotalWorkloads > 0 && item.GradedCount == item.TotalWorkloads {
+					statusText := fmt.Sprintf("ตรวจแล้ว (%d/%d)", studentGradedCount, item.TotalWorkloads)
+					if item.TotalWorkloads > 0 && studentGradedCount == item.TotalWorkloads {
 						statusText = "ตรวจครบแล้ว"
 					}
 					statCell, _ := excelize.CoordinatesToCellName(colOffset+1, currentRow)

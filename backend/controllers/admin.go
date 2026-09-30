@@ -615,6 +615,10 @@ func CreateWorkload(c *fiber.Ctx) error {
 		}
 	}
 
+	if wl.Type == "" {
+		wl.Type = models.WorkloadTypeGroup
+	}
+
 	if err := config.DB.Create(wl).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -639,6 +643,9 @@ func UpdateWorkload(c *fiber.Ctx) error {
 	wl.MaxScore = updated.MaxScore
 	wl.SampleFilePath = updated.SampleFilePath
 	wl.SampleLinkURL = updated.SampleLinkURL
+	if updated.Type != "" {
+		wl.Type = updated.Type
+	}
 
 	config.DB.Save(&wl)
 	return c.JSON(wl)

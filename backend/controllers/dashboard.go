@@ -33,9 +33,15 @@ func GetDashboardStats(c *fiber.Ctx) error {
 		}
 	}
 
-	// 1. Total Groups in the semester
+	// 1. Total Groups and Students in the semester
 	var totalGroups int64
 	config.DB.Model(&models.Group{}).Where("semester_id = ?", semesterID).Count(&totalGroups)
+
+	var totalStudents int64
+	config.DB.Table("students").
+		Joins("JOIN classrooms ON classrooms.id = students.classroom_id").
+		Where("classrooms.semester_id = ?", semesterID).
+		Count(&totalStudents)
 
 	// 2. Submission Rate per Workload
 	var workloads []models.Workload
@@ -47,8 +53,14 @@ func GetDashboardStats(c *fiber.Ctx) error {
 		config.DB.Model(&models.Submission{}).Where("workload_id = ?", wl.ID).Count(&subCount)
 
 		rate := 0.0
-		if totalGroups > 0 {
-			rate = (float64(subCount) / float64(totalGroups)) * 100.0
+		if wl.Type == models.WorkloadTypeIndividual {
+			if totalStudents > 0 {
+				rate = (float64(subCount) / float64(totalStudents)) * 100.0
+			}
+		} else {
+			if totalGroups > 0 {
+				rate = (float64(subCount) / float64(totalGroups)) * 100.0
+			}
 		}
 
 		progressList = append(progressList, WorkloadProgress{

@@ -66,17 +66,29 @@ export default function TeacherPage() {
   const [grpPageSize, setGrpPageSize] = useState(20);
   const [reportPage, setReportPage] = useState(1);
   const [reportPageSize, setReportPageSize] = useState(20);
+  const [gradingTypeFilter, setGradingTypeFilter] = useState<"all" | "individual" | "group">("all");
 
   const filteredSubmissions = submissions.filter(sub => {
     const matchesSearch = 
       (sub.group?.name || "").toLowerCase().includes(gradingSearch.toLowerCase()) ||
+      (sub.student?.full_name || "").toLowerCase().includes(gradingSearch.toLowerCase()) ||
+      (sub.student?.username || "").toLowerCase().includes(gradingSearch.toLowerCase()) ||
+      (sub.submitted_by?.full_name || "").toLowerCase().includes(gradingSearch.toLowerCase()) ||
       (sub.group?.classroom?.name || "").toLowerCase().includes(gradingSearch.toLowerCase()) ||
       (sub.workload?.title || "").toLowerCase().includes(gradingSearch.toLowerCase()) ||
       (sub.grade ? "ตรวจแล้ว" : "รอตรวจ").includes(gradingSearch);
+
     const matchesClassroom = !selectedClassroom || 
       sub.group?.classroom_id?.toString() === selectedClassroom || 
-      sub.group?.classroom?.id?.toString() === selectedClassroom;
-    return matchesSearch && matchesClassroom;
+      sub.group?.classroom?.id?.toString() === selectedClassroom ||
+      sub.student?.classroom_id?.toString() === selectedClassroom;
+
+    const isIndiv = !sub.group_id || sub.workload?.type === "individual";
+    const matchesType = gradingTypeFilter === "all" ||
+      (gradingTypeFilter === "individual" && isIndiv) ||
+      (gradingTypeFilter === "group" && !isIndiv);
+
+    return matchesSearch && matchesClassroom && matchesType;
   });
 
   const filteredFinalProjects = finalProjects.filter(f => {
@@ -491,22 +503,53 @@ export default function TeacherPage() {
                 {activeTab === "grading" && (
               <Card className="bg-white border-slate-100 text-slate-800 shadow-sm rounded-2xl">
                 <CardHeader>
-                  <CardTitle className="text-lg font-bold">ภาระงานกลุ่มย่อยที่ส่งเข้ามา (รอตรวจคะแนน)</CardTitle>
-                  <CardDescription className="text-slate-500 text-xs">คุณจะมองเห็นการนำส่งไฟล์เฉพาะนักเรียนในห้องเรียนที่คุณรับผิดชอบเท่านั้น</CardDescription>
+                  <CardTitle className="text-lg font-bold">ภาระงานที่ส่งเข้ามา (รอตรวจคะแนน)</CardTitle>
+                  <CardDescription className="text-slate-500 text-xs">คุณจะมองเห็นการนำส่งงานเดี่ยวและงานกลุ่มเฉพาะนักเรียนในห้องเรียนที่คุณรับผิดชอบเท่านั้น</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="mb-4 max-w-sm">
-                    <Input
-                      placeholder="ค้นหากลุ่ม, ห้องเรียน, หรือภาระงาน..."
-                      value={gradingSearch}
-                      onChange={(e) => setGradingSearch(e.target.value)}
-                      className="bg-slate-50 border-slate-100 text-slate-800 text-xs py-1 h-9"
-                    />
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                    <div className="max-w-sm flex-1">
+                      <Input
+                        placeholder="ค้นหากลุ่ม, นักเรียน, หรือภาระงาน..."
+                        value={gradingSearch}
+                        onChange={(e) => setGradingSearch(e.target.value)}
+                        className="bg-slate-50 border-slate-100 text-slate-800 text-xs py-1 h-9"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs self-start sm:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => setGradingTypeFilter("all")}
+                        className={`px-3 py-1 rounded-lg font-semibold transition-all cursor-pointer ${
+                          gradingTypeFilter === "all" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                        }`}
+                      >
+                        ทั้งหมด ({submissions.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGradingTypeFilter("individual")}
+                        className={`px-3 py-1 rounded-lg font-semibold transition-all cursor-pointer ${
+                          gradingTypeFilter === "individual" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                        }`}
+                      >
+                        งานเดี่ยว ({submissions.filter(s => !s.group_id || s.workload?.type === "individual").length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGradingTypeFilter("group")}
+                        className={`px-3 py-1 rounded-lg font-semibold transition-all cursor-pointer ${
+                          gradingTypeFilter === "group" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                        }`}
+                      >
+                        งานกลุ่ม ({submissions.filter(s => s.group_id && s.workload?.type !== "individual").length})
+                      </button>
+                    </div>
                   </div>
                   <Table>
                     <TableHeader className="border-slate-100">
                       <TableRow className="border-slate-100 hover:bg-slate-50/50">
-                        <TableHead className="text-slate-500">กลุ่ม / ห้อง</TableHead>
+                        <TableHead className="text-slate-500">ผู้ส่งงาน (กลุ่ม/นักเรียน)</TableHead>
                         <TableHead className="text-slate-500">ภาระงาน</TableHead>
                         <TableHead className="text-slate-500">เวลาที่ส่ง</TableHead>
                         <TableHead className="text-slate-500">ลิงก์แนบ</TableHead>
@@ -526,19 +569,53 @@ export default function TeacherPage() {
                           );
                         }
 
-                        return paginatedSubs.map((sub) => (
+                        return paginatedSubs.map((sub) => {
+                          const isIndiv = !sub.group_id || sub.workload?.type === "individual";
+                          return (
                           <TableRow key={sub.id} className="border-slate-100 hover:bg-slate-50/30">
                             <TableCell>
                               <div>
-                                <span className="font-semibold text-slate-700">{sub.group?.name}</span>
-                                <p className="text-[10px] text-primary mt-0.5 font-medium">
-                                  ห้องเรียน {sub.group?.classroom?.name || classrooms.find(c => c.id === sub.group?.classroom_id)?.name || "-"}
-                                </p>
+                                {sub.group ? (
+                                  <>
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-semibold text-slate-700">{sub.group.name}</span>
+                                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-700 rounded-full border border-emerald-200">
+                                        งานกลุ่ม
+                                      </span>
+                                    </div>
+                                    <p className="text-[10px] text-primary mt-0.5 font-medium">
+                                      ห้องเรียน {sub.group?.classroom?.name || classrooms.find(c => c.id === sub.group?.classroom_id)?.name || "-"}
+                                    </p>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-semibold text-slate-700">{sub.student?.full_name || sub.submitted_by?.full_name || `นักเรียนรหัส ${sub.student_id}`}</span>
+                                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-blue-100 text-blue-700 rounded-full border border-blue-200">
+                                        งานเดี่ยว
+                                      </span>
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 mt-0.5 font-medium">
+                                      รหัส: {sub.student?.username || "-"}
+                                    </p>
+                                  </>
+                                )}
                               </div>
                             </TableCell>
                             <TableCell>
                               <div>
-                                <span className="text-slate-600 font-medium">{sub.workload?.title}</span>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-slate-700 font-medium">{sub.workload?.title}</span>
+                                  {isIndiv ? (
+                                    <span className="px-1.5 py-0.2 text-[9px] font-bold bg-blue-100 text-blue-700 rounded">
+                                      เดี่ยว
+                                    </span>
+                                  ) : (
+                                    <span className="px-1.5 py-0.2 text-[9px] font-bold bg-emerald-100 text-emerald-700 rounded">
+                                      กลุ่ม
+                                    </span>
+                                  )}
+                                </div>
                                 <p className="text-[10px] text-slate-500 mt-0.5">คะแนนเต็ม {sub.workload?.max_score} คะแนน</p>
                                 {(sub.workload?.sample_file_path || sub.workload?.sample_link_url) && (
                                   <div className="flex gap-1 mt-1 flex-wrap">
@@ -615,9 +692,10 @@ export default function TeacherPage() {
                               </Button>
                             </TableCell>
                           </TableRow>
-                        ));
-                      })()}
-                    </TableBody>
+                        );
+                      });
+                    })()}
+                  </TableBody>
                   </Table>
                   {renderPagination(gradingPage, setGradingPage, gradingPageSize, setGradingPageSize, filteredSubmissions.length)}
                 </CardContent>
@@ -982,7 +1060,7 @@ export default function TeacherPage() {
           <DialogHeader>
             <DialogTitle>ตรวจงาน: {selectedSub?.workload?.title}</DialogTitle>
             <DialogDescription className="text-xs text-slate-500 pt-1">
-              ระบุคะแนนสะสมย่อยและข้อคิดเห็นแนะนำสำหรับกลุ่ม {selectedSub?.group?.name}
+              ระบุคะแนนสะสมย่อยและข้อคิดเห็นแนะนำสำหรับ {selectedSub?.group ? `กลุ่ม ${selectedSub.group.name}` : `นักเรียน ${selectedSub?.student?.full_name || selectedSub?.submitted_by?.full_name || ""}`}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleGradeSubmit} className="space-y-4 pt-2">

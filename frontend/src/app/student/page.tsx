@@ -26,6 +26,11 @@ export default function StudentPage() {
   // Data States
   const [groupData, setGroupData] = useState<{ group: Group; activity_logs: any[]; final_project_submission?: any } | null>(null);
   const [workloads, setWorkloads] = useState<Workload[]>([]);
+  const [mySubmissions, setMySubmissions] = useState<{
+    individual_submissions: Submission[];
+    group_submissions: Submission[];
+  }>({ individual_submissions: [], group_submissions: [] });
+  const [wlTypeFilter, setWlTypeFilter] = useState<"all" | "individual" | "group">("all");
   const [criteria, setCriteria] = useState<FinalProjectCriteria[]>([]);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [myGroupStats, setMyGroupStats] = useState<any>(null);
@@ -83,10 +88,23 @@ export default function StudentPage() {
     (log.action_by?.full_name || "").toLowerCase().includes(logSearch.toLowerCase())
   ) : [];
 
-  const filteredWorkloads = workloads.filter(wl => 
-    wl.title.toLowerCase().includes(wlSearch.toLowerCase()) ||
-    (wl.description || "").toLowerCase().includes(wlSearch.toLowerCase())
-  );
+  const getWorkloadSubmission = (wl: Workload | null | undefined): Submission | undefined => {
+    if (!wl) return undefined;
+    if (wl.type === "individual") {
+      return mySubmissions.individual_submissions.find(s => s.workload_id === wl.id);
+    }
+    return (
+      mySubmissions.group_submissions.find(s => s.workload_id === wl.id) ||
+      groupData?.group?.submissions?.find(s => s.workload_id === wl.id)
+    );
+  };
+
+  const filteredWorkloads = workloads.filter(wl => {
+    const matchesSearch = wl.title.toLowerCase().includes(wlSearch.toLowerCase()) ||
+      (wl.description || "").toLowerCase().includes(wlSearch.toLowerCase());
+    const matchesType = wlTypeFilter === "all" || (wl.type || "group") === wlTypeFilter;
+    return matchesSearch && matchesType;
+  });
 
   const filteredLeaderboard = leaderboard.filter(item => 
     item.group_name.toLowerCase().includes(lbSearch.toLowerCase()) ||
@@ -157,6 +175,17 @@ export default function StudentPage() {
         }
       } catch (err) {
         setGroupData(null); // No group yet
+      }
+
+      // 1.1 Get My Submissions (Individual & Group)
+      try {
+        const mySubsRes = await apiRequest<{
+          individual_submissions: Submission[];
+          group_submissions: Submission[];
+        }>("/student/submissions/my");
+        setMySubmissions(mySubsRes || { individual_submissions: [], group_submissions: [] });
+      } catch (err) {
+        console.error("Failed to load student submissions:", err);
       }
 
       // 2. Get Workloads
@@ -811,235 +840,307 @@ export default function StudentPage() {
             {/* SUBMISSIONS TAB (ภาระงานย่อยรายสัปดาห์/เทอม) */}
             {activeTab === "submissions" && (
               <div className="space-y-6">
-                {!groupData ? (
-                  <div className="text-center py-24 bg-slate-50 border border-slate-200/60 rounded-2xl text-slate-800 shadow-sm">
-                    <ShieldAlert className="h-10 w-10 text-amber-500 mx-auto mb-3 animate-pulse" />
-                    <h3 className="font-bold text-lg text-slate-800">กรุณาจัดตั้งกลุ่มก่อน</h3>
-                    <p className="text-sm text-slate-500 mt-1">นักเรียนต้องมีกลุ่มจึงจะเริ่มนำส่งภาระงานและอัปโหลดงานได้</p>
+                {!groupData && (
+                  <div className="p-4 bg-blue-50 border border-blue-200/80 rounded-2xl text-blue-900 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start sm:items-center gap-3">
+                      <div className="p-2 bg-blue-100 rounded-xl text-blue-700 shrink-0">
+                        <Info className="h-5 w-5" />
+                      </div>
+                      <div className="text-xs space-y-0.5">
+                        <h4 className="font-bold text-sm text-blue-900">ช่วงส่งงานเดี่ยว (ครึ่งภาคเรียนแรก)</h4>
+                        <p className="text-blue-700">
+                          คุณสามารถนำส่ง <strong>"งานเดี่ยว"</strong> ได้ทันทีโดยยังไม่ต้องจัดตั้งกลุ่ม สำหรับ <strong>"งานกลุ่ม"</strong> จะเปิดให้ส่งเมื่อคุณจัดตั้งหรือเข้าร่วมกลุ่มเรียบร้อยแล้ว
+                        </p>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setActiveTab("group")}
+                      className="bg-white hover:bg-blue-100 text-blue-700 border-blue-300 font-semibold shrink-0 cursor-pointer self-start sm:self-auto"
+                    >
+                      <Users className="h-3.5 w-3.5 mr-1.5" /> ไปจัดตั้งกลุ่ม
+                    </Button>
                   </div>
-                ) : (
-                  <Card className="bg-white border-slate-100 text-slate-800 shadow-sm rounded-2xl">
-                      <CardHeader>
-                        <CardTitle className="text-lg font-bold">ความก้าวหน้าและการส่งภาระงานรายเทอม</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="mb-4 max-w-sm">
-                          <Input
-                            placeholder="ค้นหาภาระงาน..."
-                            value={wlSearch}
-                            onChange={(e) => setWlSearch(e.target.value)}
-                            className="bg-slate-50 border-slate-100 text-slate-800 text-xs py-1 h-9"
-                          />
-                        </div>
-                        <Table>
-                          <TableHeader className="border-slate-100">
-                            <TableRow className="border-slate-100 hover:bg-slate-50/50">
-                              <TableHead className="text-slate-500">ภาระงาน</TableHead>
-                              <TableHead className="text-slate-500">กำหนดส่ง</TableHead>
-                              <TableHead className="text-slate-500">สถานะการส่ง</TableHead>
-                              <TableHead className="text-slate-500">ลิงก์แนบ</TableHead>
-                              <TableHead className="text-slate-500">คะแนนที่ได้</TableHead>
-                              <TableHead className="text-slate-500 text-right">ส่งงาน</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {filteredWorkloads.map((wl) => {
-                              // Find group's submission
-                              const sub = groupData.group.submissions?.find(s => s.workload_id === wl.id);
-                              
-                              return (
-                                <TableRow key={wl.id} className="border-slate-100 hover:bg-slate-50/30">
-                                  <TableCell className="font-semibold text-slate-700">
-                                    <div className="space-y-1">
-                                      <button 
-                                        type="button"
-                                        onClick={() => {
-                                          setViewDetailWorkload(wl);
-                                          setOpenWorkloadDetailDialog(true);
-                                        }}
-                                        className="text-left font-bold text-slate-900 hover:text-primary transition-colors flex items-center gap-1.5 cursor-pointer group"
-                                      >
-                                        <span>{wl.title}</span>
-                                        <Info className="h-3.5 w-3.5 text-primary/70 group-hover:text-primary shrink-0" />
-                                      </button>
-                                      {(() => {
-                                        const isExpanded = !!expandedWlIds[wl.id];
-                                        const rawDesc = wl.description?.trim();
+                )}
 
-                                        if (!rawDesc) {
-                                          return (
-                                            <div className="flex items-center justify-between pt-1">
-                                              <p className="text-xs text-slate-400 font-normal italic">
-                                                ไม่มีรายละเอียด
-                                              </p>
-                                              <button
-                                                type="button"
-                                                onClick={() => {
-                                                  setViewDetailWorkload(wl);
-                                                  setOpenWorkloadDetailDialog(true);
-                                                }}
-                                                className="text-[11px] font-semibold text-slate-500 hover:text-slate-700 transition-colors inline-flex items-center gap-1 cursor-pointer"
-                                              >
-                                                <Eye className="h-3 w-3 text-primary" /> แสดงฉบับเต็ม
-                                              </button>
-                                            </div>
-                                          );
-                                        }
+                <Card className="bg-white border-slate-100 text-slate-800 shadow-sm rounded-2xl">
+                  <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
+                    <div>
+                      <CardTitle className="text-lg font-bold">ความก้าวหน้าและการส่งภาระงาน</CardTitle>
+                      <CardDescription className="text-xs text-slate-500">
+                        ภาระงานเดี่ยวและภาระงานกลุ่มประจำภาคการศึกษา
+                      </CardDescription>
+                    </div>
 
-                                        const isLong = rawDesc.length > 50 || rawDesc.includes("\n");
+                    {/* Filter Pills */}
+                    <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs self-start sm:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => setWlTypeFilter("all")}
+                        className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                          wlTypeFilter === "all" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                        }`}
+                      >
+                        ทั้งหมด ({workloads.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWlTypeFilter("individual")}
+                        className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                          wlTypeFilter === "individual" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                        }`}
+                      >
+                        <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>
+                        งานเดี่ยว ({workloads.filter(w => w.type === "individual").length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWlTypeFilter("group")}
+                        className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                          wlTypeFilter === "group" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                        }`}
+                      >
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+                        งานกลุ่ม ({workloads.filter(w => (w.type || "group") === "group").length})
+                      </button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="mb-4 max-w-sm">
+                      <Input
+                        placeholder="ค้นหาภาระงาน..."
+                        value={wlSearch}
+                        onChange={(e) => setWlSearch(e.target.value)}
+                        className="bg-slate-50 border-slate-100 text-slate-800 text-xs py-1 h-9"
+                      />
+                    </div>
+                    <Table>
+                      <TableHeader className="border-slate-100">
+                        <TableRow className="border-slate-100 hover:bg-slate-50/50">
+                          <TableHead className="text-slate-500">ภาระงาน</TableHead>
+                          <TableHead className="text-slate-500">กำหนดส่ง</TableHead>
+                          <TableHead className="text-slate-500">สถานะการส่ง</TableHead>
+                          <TableHead className="text-slate-500">เอกสาร/ลิงก์</TableHead>
+                          <TableHead className="text-slate-500">คะแนนที่ได้</TableHead>
+                          <TableHead className="text-slate-500 text-right">ส่งงาน</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredWorkloads.map((wl) => {
+                          const sub = getWorkloadSubmission(wl);
+                          const isIndiv = wl.type === "individual";
+                          
+                          return (
+                            <TableRow key={wl.id} className="border-slate-100 hover:bg-slate-50/30">
+                              <TableCell className="font-semibold text-slate-700">
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <button 
+                                      type="button"
+                                      onClick={() => {
+                                        setViewDetailWorkload(wl);
+                                        setOpenWorkloadDetailDialog(true);
+                                      }}
+                                      className="text-left font-bold text-slate-900 hover:text-primary transition-colors flex items-center gap-1.5 cursor-pointer group"
+                                    >
+                                      <span>{wl.title}</span>
+                                      <Info className="h-3.5 w-3.5 text-primary/70 group-hover:text-primary shrink-0" />
+                                    </button>
+                                    {isIndiv ? (
+                                      <span className="px-2 py-0.5 text-[10px] font-bold bg-blue-100 text-blue-700 rounded-full border border-blue-200">
+                                        งานเดี่ยว
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 text-[10px] font-bold bg-emerald-100 text-emerald-700 rounded-full border border-emerald-200">
+                                        งานกลุ่ม
+                                      </span>
+                                    )}
+                                  </div>
+                                  {(() => {
+                                    const isExpanded = !!expandedWlIds[wl.id];
+                                    const rawDesc = wl.description?.trim();
 
-                                        return (
-                                          <div className="space-y-1">
-                                            <p className="text-xs text-slate-600 font-normal whitespace-pre-line leading-relaxed max-w-lg">
-                                              {isExpanded || !isLong ? rawDesc : `${rawDesc.slice(0, 50).trim()}...`}
-                                            </p>
-                                            <div className="flex items-center justify-between pt-0.5 gap-2">
-                                              {isLong ? (
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    setExpandedWlIds((prev) => ({
-                                                      ...prev,
-                                                      [wl.id]: !prev[wl.id],
-                                                    }))
-                                                  }
-                                                  className="text-[11px] font-semibold text-primary hover:text-primary/80 transition-colors inline-flex items-center gap-1 cursor-pointer"
-                                                >
-                                                  {isExpanded ? (
-                                                    <>
-                                                      <ChevronUp className="h-3 w-3" /> ย่อรายละเอียด
-                                                    </>
-                                                  ) : (
-                                                    <>
-                                                      <ChevronDown className="h-3 w-3" /> ย่อคำชี้แจง (ขยาย)
-                                                    </>
-                                                  )}
-                                                </button>
-                                              ) : (
-                                                <div />
-                                              )}
-                                              <button
-                                                type="button"
-                                                onClick={() => {
-                                                  setViewDetailWorkload(wl);
-                                                  setOpenWorkloadDetailDialog(true);
-                                                }}
-                                                className="text-[11px] font-semibold text-slate-500 hover:text-slate-700 transition-colors inline-flex items-center gap-1 cursor-pointer"
-                                              >
-                                                <Eye className="h-3 w-3 text-primary" /> แสดงฉบับเต็ม
-                                              </button>
-                                            </div>
-                                          </div>
-                                        );
-                                      })()}
-                                      {(wl.sample_file_path || wl.sample_link_url) && (
-                                        <div className="flex gap-1.5 mt-1 flex-wrap font-normal">
-                                          {wl.sample_file_path && (
-                                            <a 
-                                              href={`${BACKEND_URL}${wl.sample_file_path}`} 
-                                              target="_blank" 
-                                              rel="noopener noreferrer"
-                                              className="inline-flex items-center gap-0.5 text-[9px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-1 py-0.5 rounded transition-colors duration-200"
-                                            >
-                                              <File className="h-2.5 w-2.5 text-rose-500" /> ไฟล์ตัวอย่าง
-                                            </a>
-                                          )}
-                                          {wl.sample_link_url && (
-                                            <a 
-                                              href={wl.sample_link_url} 
-                                              target="_blank" 
-                                              rel="noopener noreferrer"
-                                              className="inline-flex items-center gap-0.5 text-[9px] bg-primary/10 hover:bg-primary/20 text-primary px-1 py-0.5 rounded transition-colors duration-200"
-                                            >
-                                              <LinkIcon className="h-2.5 w-2.5" /> ลิงก์ตัวอย่าง
-                                            </a>
-                                          )}
+                                    if (!rawDesc) {
+                                      return (
+                                        <div className="flex items-center justify-between pt-1">
+                                          <p className="text-xs text-slate-400 font-normal italic">
+                                            ไม่มีรายละเอียด
+                                          </p>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setViewDetailWorkload(wl);
+                                              setOpenWorkloadDetailDialog(true);
+                                            }}
+                                            className="text-[11px] font-semibold text-slate-500 hover:text-slate-700 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                                          >
+                                            <Eye className="h-3 w-3 text-primary" /> แสดงฉบับเต็ม
+                                          </button>
                                         </div>
+                                      );
+                                    }
+
+                                    const isLong = rawDesc.length > 50 || rawDesc.includes("\n");
+
+                                    return (
+                                      <div className="space-y-1">
+                                        <p className="text-xs text-slate-600 font-normal whitespace-pre-line leading-relaxed max-w-lg">
+                                          {isExpanded || !isLong ? rawDesc : `${rawDesc.slice(0, 50).trim()}...`}
+                                        </p>
+                                        <div className="flex items-center justify-between pt-0.5 gap-2">
+                                          {isLong ? (
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                setExpandedWlIds((prev) => ({
+                                                  ...prev,
+                                                  [wl.id]: !prev[wl.id],
+                                                }))
+                                              }
+                                              className="text-[11px] font-semibold text-primary hover:text-primary/80 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                                            >
+                                              {isExpanded ? (
+                                                <>
+                                                  <ChevronUp className="h-3 w-3" /> ย่อรายละเอียด
+                                                </>
+                                              ) : (
+                                                <>
+                                                  <ChevronDown className="h-3 w-3" /> ย่อคำชี้แจง (ขยาย)
+                                                </>
+                                              )}
+                                            </button>
+                                          ) : (
+                                            <div />
+                                          )}
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setViewDetailWorkload(wl);
+                                              setOpenWorkloadDetailDialog(true);
+                                            }}
+                                            className="text-[11px] font-semibold text-slate-500 hover:text-slate-700 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                                          >
+                                            <Eye className="h-3 w-3 text-primary" /> แสดงฉบับเต็ม
+                                          </button>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
+                                  {(wl.sample_file_path || wl.sample_link_url) && (
+                                    <div className="flex gap-1.5 mt-1 flex-wrap font-normal">
+                                      {wl.sample_file_path && (
+                                        <a 
+                                          href={`${BACKEND_URL}${wl.sample_file_path}`} 
+                                          target="_blank" 
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-0.5 text-[9px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-1 py-0.5 rounded transition-colors duration-200"
+                                        >
+                                          <File className="h-2.5 w-2.5 text-rose-500" /> ไฟล์ตัวอย่าง
+                                        </a>
+                                      )}
+                                      {wl.sample_link_url && (
+                                        <a 
+                                          href={wl.sample_link_url} 
+                                          target="_blank" 
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-0.5 text-[9px] bg-primary/10 hover:bg-primary/20 text-primary px-1 py-0.5 rounded transition-colors duration-200"
+                                        >
+                                          <LinkIcon className="h-2.5 w-2.5" /> ลิงก์ตัวอย่าง
+                                        </a>
                                       )}
                                     </div>
-                                  </TableCell>
-                                  <TableCell className="text-slate-500 text-xs">
-                                    {new Date(wl.deadline).toLocaleString("th-TH")}
-                                  </TableCell>
-                                  <TableCell>
-                                    {sub ? (
-                                      <div className="flex flex-col gap-0.5">
-                                        <span className="text-xs text-emerald-400 flex items-center gap-1">
-                                          <CheckCircle className="h-3 w-3" /> ส่งแล้ว
-                                        </span>
-                                        {sub.is_late && (
-                                          <span className="text-[9px] bg-rose-50 text-rose-700 px-2 py-0.5 border border-rose-200 rounded w-max font-semibold">ส่งเลท</span>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <span className="text-xs text-slate-500 italic">ยังไม่ส่ง</span>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-slate-500 text-xs">
+                                {new Date(wl.deadline).toLocaleString("th-TH")}
+                              </TableCell>
+                              <TableCell>
+                                {sub ? (
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="text-xs text-emerald-600 font-semibold flex items-center gap-1">
+                                      <CheckCircle className="h-3 w-3" /> ส่งแล้ว
+                                    </span>
+                                    {sub.is_late && (
+                                      <span className="text-[9px] bg-rose-50 text-rose-700 px-2 py-0.5 border border-rose-200 rounded w-max font-semibold">ส่งเลท</span>
                                     )}
-                                  </TableCell>
-                                  <TableCell>
-                                    {sub?.link_url ? (
-                                      <a 
-                                        href={sub.link_url} 
-                                        target="_blank" 
-                                        rel="noopener noreferrer"
-                                        className="text-xs text-primary hover:underline flex items-center gap-1"
-                                      >
-                                        <LinkIcon className="h-3 w-3" /> ลิงก์แนบ
-                                      </a>
-                                    ) : sub?.file_path ? (
-                                      <a 
-                                        href={`${BACKEND_URL}${sub.file_path}`} 
-                                        target="_blank" 
-                                        rel="noopener noreferrer"
-                                        className="text-xs text-primary hover:underline flex items-center gap-1"
-                                      >
-                                        <File className="h-3 w-3" /> ไฟล์แนบ
-                                      </a>
-                                    ) : (
-                                      "-"
+                                  </div>
+                                ) : !isIndiv && !groupData ? (
+                                  <span className="text-xs text-amber-600 font-medium italic">ยังไม่มีกลุ่ม</span>
+                                ) : (
+                                  <span className="text-xs text-slate-500 italic">ยังไม่ส่ง</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {sub?.link_url ? (
+                                  <a 
+                                    href={sub.link_url} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-primary hover:underline flex items-center gap-1"
+                                  >
+                                    <LinkIcon className="h-3 w-3" /> ลิงก์แนบ
+                                  </a>
+                                ) : sub?.file_path ? (
+                                  <a 
+                                    href={`${BACKEND_URL}${sub.file_path}`} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-primary hover:underline flex items-center gap-1"
+                                  >
+                                    <File className="h-3 w-3" /> ไฟล์แนบ
+                                  </a>
+                                ) : (
+                                  "-"
+                                )}
+                              </TableCell>
+                              <TableCell className="font-semibold">
+                                {sub?.grade ? (
+                                  <div className="flex flex-col">
+                                    <span className="text-primary font-bold">{sub.grade.score} / {wl.max_score}</span>
+                                    {sub.grade.comment && (
+                                      <span className="text-[9px] text-slate-500 font-normal italic max-w-[120px] truncate" title={sub.grade.comment}>
+                                        "{sub.grade.comment}"
+                                      </span>
                                     )}
-                                  </TableCell>
-                                  <TableCell className="font-semibold">
-                                    {sub?.grade ? (
-                                      <div className="flex flex-col">
-                                        <span className="text-primary font-bold">{sub.grade.score} / {wl.max_score}</span>
-                                        {sub.grade.comment && (
-                                          <span className="text-[9px] text-slate-500 font-normal italic max-w-[120px] truncate" title={sub.grade.comment}>
-                                            "{sub.grade.comment}"
-                                          </span>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <span className="text-xs text-slate-500">-</span>
-                                    )}
-                                  </TableCell>
-                                  <TableCell className="text-right">
-                                    <Button
-                                      size="sm"
-                                      onClick={() => {
-                                        setSelectedWorkload(wl);
-                                        setSubmissionLink(sub?.link_url || "");
-                                        setSubmissionType(sub?.file_path ? "file" : "link");
-                                        setSubmissionFile(null);
-                                        setOpenSubmitDialog(true);
-                                      }}
-                                      className="bg-primary hover:bg-primary/90 transition-colors duration-200 cursor-pointer"
-                                    >
-                                      {sub ? "ส่งใหม่" : "อัปโหลดส่ง"}
-                                    </Button>
-                                  </TableCell>
-                                </TableRow>
-                              );
-                            })}
-                            {filteredWorkloads.length === 0 && (
-                              <TableRow>
-                                <TableCell colSpan={6} className="text-center py-12 text-slate-500 italic">ไม่พบข้อมูลภาระงานที่ค้นหา</TableCell>
-                              </TableRow>
-                            )}
-                          </TableBody>
-                        </Table>
-                      </CardContent>
-                    </Card>
-                )}
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-500">-</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  size="sm"
+                                  onClick={() => {
+                                    if (!isIndiv && !groupData) {
+                                      toast.error("ภาระงานนี้เป็นงานกลุ่ม กรุณาจัดตั้งหรือเข้าร่วมกลุ่มก่อนส่งงาน");
+                                      setActiveTab("group");
+                                      return;
+                                    }
+                                    setSelectedWorkload(wl);
+                                    setSubmissionLink(sub?.link_url || "");
+                                    setSubmissionType(sub?.file_path ? "file" : "link");
+                                    setSubmissionFile(null);
+                                    setOpenSubmitDialog(true);
+                                  }}
+                                  className="bg-primary hover:bg-primary/90 transition-colors duration-200 cursor-pointer text-white font-semibold"
+                                >
+                                  {sub ? "แก้ไขการส่ง" : "ส่งงาน"}
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                        {filteredWorkloads.length === 0 && (
+                          <TableRow>
+                            <TableCell colSpan={6} className="text-center py-12 text-slate-500 italic">ไม่พบข้อมูลภาระงานที่ค้นหา</TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
               </div>
             )}
 
@@ -1452,12 +1553,22 @@ export default function StudentPage() {
                 </div>
               )}
 
-              {/* Current Group Submission Info */}
-              {groupData?.group && (() => {
-                const sub = groupData.group.submissions?.find(s => s.workload_id === viewDetailWorkload.id);
+              {/* Current Submission Info */}
+              {(() => {
+                const sub = getWorkloadSubmission(viewDetailWorkload);
+                const isIndiv = viewDetailWorkload.type === "individual";
                 return (
                   <div className="border-t border-slate-100 pt-4 space-y-2">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">สถานะการส่งงานของกลุ่ม</h4>
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        สถานะการส่งงาน ({isIndiv ? "งานเดี่ยวของคุณ" : "งานของกลุ่ม"})
+                      </h4>
+                      <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full border ${
+                        isIndiv ? "bg-blue-100 text-blue-700 border-blue-200" : "bg-emerald-100 text-emerald-700 border-emerald-200"
+                      }`}>
+                        {isIndiv ? "งานเดี่ยว" : "งานกลุ่ม"}
+                      </span>
+                    </div>
                     {sub ? (
                       <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-xl p-3.5 space-y-2 text-xs">
                         <div className="flex justify-between items-center">
@@ -1481,9 +1592,13 @@ export default function StudentPage() {
                           </div>
                         )}
                       </div>
-                    ) : (
+                    ) : !isIndiv && !groupData ? (
                       <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 flex items-center justify-between">
-                        <span>กลุ่มของคุณยังไม่ได้ส่งภาระงานนี้</span>
+                        <span>คุณยังไม่มีกลุ่มในภาคการเรียนนี้ กรุณาจัดตั้งหรือเข้าร่วมกลุ่มก่อนส่งงานกลุ่ม</span>
+                      </div>
+                    ) : (
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600 flex items-center justify-between">
+                        <span>ยังไม่มีการส่งภาระงานนี้</span>
                       </div>
                     )}
                   </div>
@@ -1499,11 +1614,11 @@ export default function StudentPage() {
                 >
                   ปิด
                 </Button>
-                {groupData?.group && (
+                {(viewDetailWorkload.type === "individual" || groupData?.group) && (
                   <Button
                     type="button"
                     onClick={() => {
-                      const sub = groupData.group.submissions?.find(s => s.workload_id === viewDetailWorkload.id);
+                      const sub = getWorkloadSubmission(viewDetailWorkload);
                       setSelectedWorkload(viewDetailWorkload);
                       setSubmissionLink(sub?.link_url || "");
                       setSubmissionType(sub?.file_path ? "file" : "link");
@@ -1513,7 +1628,7 @@ export default function StudentPage() {
                     }}
                     className="bg-primary hover:bg-primary/90 text-white font-semibold cursor-pointer"
                   >
-                    {groupData.group.submissions?.some(s => s.workload_id === viewDetailWorkload.id) ? "แก้ไขการส่งงาน" : "ส่งงานนี้"}
+                    {getWorkloadSubmission(viewDetailWorkload) ? "แก้ไขการส่งงาน" : "ส่งงานนี้"}
                   </Button>
                 )}
               </DialogFooter>

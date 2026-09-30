@@ -78,25 +78,35 @@ type GroupActivityLog struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+type WorkloadType string
+
+const (
+	WorkloadTypeIndividual WorkloadType = "individual"
+	WorkloadTypeGroup      WorkloadType = "group"
+)
+
 type Workload struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	SemesterID     uint      `gorm:"not null" json:"semester_id"`
-	Semester       Semester  `gorm:"foreignKey:SemesterID;constraint:OnDelete:CASCADE" json:"semester,omitempty"`
-	Title          string    `gorm:"not null" json:"title"`
-	Description    string    `json:"description"`
-	Deadline       time.Time `gorm:"not null" json:"deadline"`
-	MaxScore       float64   `gorm:"type:decimal(5,2);not null" json:"max_score"`
-	SampleFilePath string    `json:"sample_file_path"`
-	SampleLinkURL  string    `json:"sample_link_url"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             uint         `gorm:"primaryKey" json:"id"`
+	SemesterID     uint         `gorm:"not null" json:"semester_id"`
+	Semester       Semester     `gorm:"foreignKey:SemesterID;constraint:OnDelete:CASCADE" json:"semester,omitempty"`
+	Title          string       `gorm:"not null" json:"title"`
+	Description    string       `json:"description"`
+	Deadline       time.Time    `gorm:"not null" json:"deadline"`
+	MaxScore       float64      `gorm:"type:decimal(5,2);not null" json:"max_score"`
+	SampleFilePath string       `json:"sample_file_path"`
+	SampleLinkURL  string       `json:"sample_link_url"`
+	Type           WorkloadType `gorm:"type:varchar(20);default:'group';not null" json:"type"`
+	CreatedAt      time.Time    `json:"created_at"`
 }
 
 type Submission struct {
 	ID            uint           `gorm:"primaryKey" json:"id"`
 	WorkloadID    uint           `gorm:"not null" json:"workload_id"`
 	Workload      Workload       `gorm:"foreignKey:WorkloadID;constraint:OnDelete:CASCADE" json:"workload,omitempty"`
-	GroupID       uint           `gorm:"not null" json:"group_id"`
-	Group         Group          `gorm:"foreignKey:GroupID;constraint:OnDelete:CASCADE" json:"group,omitempty"`
+	GroupID       *uint          `json:"group_id,omitempty"`
+	Group         *Group         `gorm:"foreignKey:GroupID;constraint:OnDelete:CASCADE" json:"group,omitempty"`
+	StudentID     uint           `gorm:"index;not null" json:"student_id"`
+	Student       User           `gorm:"foreignKey:StudentID" json:"student,omitempty"`
 	SubmittedByID uint           `gorm:"not null" json:"submitted_by_id"`
 	SubmittedBy   User           `gorm:"foreignKey:SubmittedByID" json:"submitted_by,omitempty"`
 	FilePath      string         `json:"file_path"`
