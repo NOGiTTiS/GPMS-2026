@@ -96,6 +96,8 @@ type Workload struct {
 	SampleFilePath string       `json:"sample_file_path"`
 	SampleLinkURL  string       `json:"sample_link_url"`
 	Type           WorkloadType `gorm:"type:varchar(20);default:'group';not null" json:"type"`
+	IsOpen         bool         `gorm:"default:true" json:"is_open"`
+	AllowLate      bool         `gorm:"default:true" json:"allow_late"`
 	CreatedAt      time.Time    `json:"created_at"`
 }
 

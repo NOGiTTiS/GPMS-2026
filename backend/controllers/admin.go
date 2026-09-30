@@ -4,6 +4,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"gpms-backend/config"
 	"gpms-backend/models"
@@ -72,6 +73,144 @@ func DeleteSemester(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"status": "deleted"})
 }
 
+type CloneSemesterInput struct {
+	SourceSemesterID uint `json:"source_semester_id"`
+	CloneClassrooms  bool `json:"clone_classrooms"`
+	CloneTeachers    bool `json:"clone_teachers"`
+	CloneWorkloads   bool `json:"clone_workloads"`
+	CloneCriteria    bool `json:"clone_criteria"`
+}
+
+func CloneSemesterStructure(c *fiber.Ctx) error {
+	targetSemesterIDStr := c.Params("id")
+	targetSemID, err := strconv.Atoi(targetSemesterIDStr)
+	if err != nil || targetSemID <= 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid target semester ID"})
+	}
+
+	input := new(CloneSemesterInput)
+	if err := c.BodyParser(input); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	if input.SourceSemesterID == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Source semester ID is required"})
+	}
+
+	if uint(targetSemID) == input.SourceSemesterID {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Source and target semester cannot be the same"})
+	}
+
+	var sourceSem, targetSem models.Semester
+	if err := config.DB.First(&sourceSem, input.SourceSemesterID).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Source semester not found"})
+	}
+	if err := config.DB.First(&targetSem, targetSemID).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Target semester not found"})
+	}
+
+	tx := config.DB.Begin()
+
+	clonedClassroomsCount := 0
+	clonedWorkloadsCount := 0
+	clonedCriteriaCount := 0
+
+	// 1. Clone Classrooms
+	if input.CloneClassrooms {
+		var sourceClassrooms []models.Classroom
+		tx.Preload("Teachers").Where("semester_id = ?", sourceSem.ID).Find(&sourceClassrooms)
+
+		for _, sc := range sourceClassrooms {
+			var existing models.Classroom
+			if err := tx.Where("semester_id = ? AND name = ?", targetSem.ID, sc.Name).First(&existing).Error; err != nil {
+				newClass := models.Classroom{
+					Name:       sc.Name,
+					SemesterID: targetSem.ID,
+				}
+				if err := tx.Create(&newClass).Error; err != nil {
+					tx.Rollback()
+					return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to clone classroom: " + err.Error()})
+				}
+				clonedClassroomsCount++
+
+				if input.CloneTeachers && len(sc.Teachers) > 0 {
+					tx.Model(&newClass).Association("Teachers").Replace(&sc.Teachers)
+				}
+			} else {
+				if input.CloneTeachers && len(sc.Teachers) > 0 {
+					tx.Model(&existing).Association("Teachers").Replace(&sc.Teachers)
+				}
+			}
+		}
+	}
+
+	// 2. Clone Workloads
+	if input.CloneWorkloads {
+		var sourceWorkloads []models.Workload
+		tx.Where("semester_id = ?", sourceSem.ID).Find(&sourceWorkloads)
+
+		for _, sw := range sourceWorkloads {
+			var existing models.Workload
+			if err := tx.Where("semester_id = ? AND title = ?", targetSem.ID, sw.Title).First(&existing).Error; err != nil {
+				defaultDeadline := time.Now().AddDate(0, 1, 0)
+				newWl := models.Workload{
+					SemesterID:     targetSem.ID,
+					Title:          sw.Title,
+					Description:    sw.Description,
+					Deadline:       defaultDeadline,
+					MaxScore:       sw.MaxScore,
+					SampleFilePath: sw.SampleFilePath,
+					SampleLinkURL:  sw.SampleLinkURL,
+					Type:           sw.Type,
+					IsOpen:         true,
+					AllowLate:      sw.AllowLate,
+					CreatedAt:      time.Now(),
+				}
+				if err := tx.Create(&newWl).Error; err != nil {
+					tx.Rollback()
+					return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to clone workload: " + err.Error()})
+				}
+				clonedWorkloadsCount++
+			}
+		}
+	}
+
+	// 3. Clone Criteria
+	if input.CloneCriteria {
+		var sourceCriteria []models.FinalProjectCriteria
+		tx.Where("semester_id = ?", sourceSem.ID).Find(&sourceCriteria)
+
+		for _, sc := range sourceCriteria {
+			var existing models.FinalProjectCriteria
+			if err := tx.Where("semester_id = ? AND title = ?", targetSem.ID, sc.Title).First(&existing).Error; err != nil {
+				newCrit := models.FinalProjectCriteria{
+					SemesterID: targetSem.ID,
+					Title:      sc.Title,
+					MaxScore:   sc.MaxScore,
+					Weight:     sc.Weight,
+				}
+				if err := tx.Create(&newCrit).Error; err != nil {
+					tx.Rollback()
+					return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to clone criteria: " + err.Error()})
+				}
+				clonedCriteriaCount++
+			}
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to commit cloning transaction"})
+	}
+
+	return c.JSON(fiber.Map{
+		"status":            "success",
+		"message":           "Structure cloned successfully",
+		"cloned_classrooms": clonedClassroomsCount,
+		"cloned_workloads":  clonedWorkloadsCount,
+		"cloned_criteria":   clonedCriteriaCount,
+	})
+}
+
 // ==========================================
 // USERS
 // ==========================================
@@ -93,6 +232,30 @@ type UserResponse struct {
 
 func GetUsers(c *fiber.Ctx) error {
 	role := c.Query("role")
+	semesterIDStr := c.Query("semester_id")
+
+	var targetSemesterID uint
+	if semesterIDStr != "" && semesterIDStr != "all" {
+		if id, err := strconv.Atoi(semesterIDStr); err == nil {
+			targetSemesterID = uint(id)
+		}
+	}
+
+	// Fetch student classroom associations
+	var students []models.Student
+	studentQuery := config.DB.Preload("Classroom")
+	if targetSemesterID > 0 {
+		studentQuery = studentQuery.Joins("JOIN classrooms ON classrooms.id = students.classroom_id").
+			Where("classrooms.semester_id = ?", targetSemesterID)
+	}
+	studentQuery.Find(&students)
+	studentMap := make(map[uint]models.Student)
+	targetStudentUserIDs := make(map[uint]bool)
+	for _, s := range students {
+		studentMap[s.UserID] = s
+		targetStudentUserIDs[s.UserID] = true
+	}
+
 	var users []models.User
 	query := config.DB.Order("id asc")
 	if role != "" {
@@ -102,14 +265,6 @@ func GetUsers(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	// Fetch student classroom associations
-	var students []models.Student
-	config.DB.Preload("Classroom").Find(&students)
-	studentMap := make(map[uint]models.Student)
-	for _, s := range students {
-		studentMap[s.UserID] = s
-	}
-
 	// Fetch teacher classroom associations to show classrooms they teach
 	type ClassroomTeacher struct {
 		ClassroomID uint
@@ -117,18 +272,28 @@ func GetUsers(c *fiber.Ctx) error {
 		ClassName   string
 	}
 	var classTeachers []ClassroomTeacher
-	config.DB.Table("classroom_teachers").
+	queryTeachers := config.DB.Table("classroom_teachers").
 		Select("classroom_teachers.user_id, classroom_teachers.classroom_id, classrooms.name as class_name").
-		Joins("join classrooms on classrooms.id = classroom_teachers.classroom_id").
-		Scan(&classTeachers)
+		Joins("join classrooms on classrooms.id = classroom_teachers.classroom_id")
+	if targetSemesterID > 0 {
+		queryTeachers = queryTeachers.Where("classrooms.semester_id = ?", targetSemesterID)
+	}
+	queryTeachers.Scan(&classTeachers)
 	
 	teacherMap := make(map[uint][]string)
 	for _, ct := range classTeachers {
 		teacherMap[ct.UserID] = append(teacherMap[ct.UserID], ct.ClassName)
 	}
 
-	response := make([]UserResponse, len(users))
-	for i, u := range users {
+	var response []UserResponse
+	for _, u := range users {
+		// If filtering by semester, only include students who are enrolled in that semester's classrooms!
+		if targetSemesterID > 0 && u.Role == models.RoleStudent {
+			if !targetStudentUserIDs[u.ID] {
+				continue
+			}
+		}
+
 		res := UserResponse{User: u}
 		if u.Role == models.RoleStudent {
 			if s, ok := studentMap[u.ID]; ok {
@@ -147,7 +312,11 @@ func GetUsers(c *fiber.Ctx) error {
 				res.ClassroomName = classList
 			}
 		}
-		response[i] = res
+		response = append(response, res)
+	}
+
+	if response == nil {
+		response = []UserResponse{}
 	}
 
 	return c.JSON(response)
@@ -237,16 +406,24 @@ func ImportUsers(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to read rows"})
 	}
 
-	var activeSem models.Semester
-	var activeSemID uint
-	if err := config.DB.Where("is_active = ?", true).First(&activeSem).Error; err == nil {
-		activeSemID = activeSem.ID
+	semesterIDStr := c.Query("semester_id")
+	var targetSemID uint
+	if semesterIDStr != "" && semesterIDStr != "all" {
+		if id, err := strconv.Atoi(semesterIDStr); err == nil {
+			targetSemID = uint(id)
+		}
+	}
+	if targetSemID == 0 {
+		var activeSem models.Semester
+		if err := config.DB.Where("is_active = ?", true).First(&activeSem).Error; err == nil {
+			targetSemID = activeSem.ID
+		}
 	}
 
 	classroomCache := make(map[string]uint)
-	if activeSemID > 0 {
+	if targetSemID > 0 {
 		var classrooms []models.Classroom
-		config.DB.Where("semester_id = ?", activeSemID).Find(&classrooms)
+		config.DB.Where("semester_id = ?", targetSemID).Find(&classrooms)
 		for _, cr := range classrooms {
 			classroomCache[cr.Name] = cr.ID
 		}
@@ -254,6 +431,9 @@ func ImportUsers(c *fiber.Ctx) error {
 
 	tx := config.DB.Begin()
 	importedCount := 0
+	createdCount := 0
+	updatedCount := 0
+
 	for idx, row := range rows {
 		if idx == 0 {
 			// Skip header row
@@ -313,38 +493,76 @@ func ImportUsers(c *fiber.Ctx) error {
 			}
 		}
 
-		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-		if err != nil {
-			tx.Rollback()
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
-		}
-
-		user := models.User{
-			Username:     username,
-			PasswordHash: string(hashedPassword),
-			FullName:     fullName,
-			Email:        email,
-			Role:         role,
-		}
-
-		if err := tx.Create(&user).Error; err != nil {
-			continue
-		}
-
-		if user.Role == models.RoleStudent && classroomID > 0 {
-			student := models.Student{
-				UserID:      user.ID,
-				ClassroomID: classroomID,
+		var existingUser models.User
+		if err := tx.Where("LOWER(username) = LOWER(?)", username).First(&existingUser).Error; err == nil {
+			// User already exists -> Smart Upsert
+			existingUser.FullName = fullName
+			if email != "" {
+				existingUser.Email = email
 			}
-			tx.Create(&student)
+			if password != "password1234" && password != "" {
+				if hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost); err == nil {
+					existingUser.PasswordHash = string(hashed)
+				}
+			}
+			tx.Save(&existingUser)
+
+			if existingUser.Role == models.RoleStudent && classroomID > 0 {
+				var student models.Student
+				if err := tx.Where("user_id = ?", existingUser.ID).First(&student).Error; err == nil {
+					student.ClassroomID = classroomID
+					tx.Save(&student)
+				} else {
+					student = models.Student{
+						UserID:      existingUser.ID,
+						ClassroomID: classroomID,
+					}
+					tx.Create(&student)
+				}
+			}
+			updatedCount++
+			importedCount++
+		} else {
+			// New User
+			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+			if err != nil {
+				tx.Rollback()
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to hash password"})
+			}
+
+			user := models.User{
+				Username:     username,
+				PasswordHash: string(hashedPassword),
+				FullName:     fullName,
+				Email:        email,
+				Role:         role,
+			}
+
+			if err := tx.Create(&user).Error; err != nil {
+				continue
+			}
+
+			if user.Role == models.RoleStudent && classroomID > 0 {
+				student := models.Student{
+					UserID:      user.ID,
+					ClassroomID: classroomID,
+				}
+				tx.Create(&student)
+			}
+			createdCount++
+			importedCount++
 		}
-		importedCount++
 	}
 	if err := tx.Commit().Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to commit transaction: " + err.Error()})
 	}
 
-	return c.JSON(fiber.Map{"status": "success", "imported": importedCount})
+	return c.JSON(fiber.Map{
+		"status":   "success",
+		"imported": importedCount,
+		"created":  createdCount,
+		"updated":  updatedCount,
+	})
 }
 
 func DownloadImportTemplate(c *fiber.Ctx) error {
@@ -599,27 +817,65 @@ func GetWorkloads(c *fiber.Ctx) error {
 	return c.JSON(workloads)
 }
 
+type WorkloadInput struct {
+	SemesterID     uint                `json:"semester_id"`
+	Title          string              `json:"title"`
+	Description    string              `json:"description"`
+	Deadline       time.Time           `json:"deadline"`
+	MaxScore       float64             `json:"max_score"`
+	SampleFilePath string              `json:"sample_file_path"`
+	SampleLinkURL  string              `json:"sample_link_url"`
+	Type           models.WorkloadType `json:"type"`
+	IsOpen         *bool               `json:"is_open"`
+	AllowLate      *bool               `json:"allow_late"`
+}
+
 func CreateWorkload(c *fiber.Ctx) error {
-	wl := new(models.Workload)
-	if err := c.BodyParser(wl); err != nil {
+	input := new(WorkloadInput)
+	if err := c.BodyParser(input); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	// Auto associate active semester if zero
-	if wl.SemesterID == 0 {
+	semesterID := input.SemesterID
+	if semesterID == 0 {
 		var activeSem models.Semester
 		if err := config.DB.Where("is_active = ?", true).First(&activeSem).Error; err == nil {
-			wl.SemesterID = activeSem.ID
+			semesterID = activeSem.ID
 		} else {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No active semester found"})
 		}
 	}
 
-	if wl.Type == "" {
-		wl.Type = models.WorkloadTypeGroup
+	wlType := input.Type
+	if wlType == "" {
+		wlType = models.WorkloadTypeGroup
 	}
 
-	if err := config.DB.Create(wl).Error; err != nil {
+	isOpen := true
+	if input.IsOpen != nil {
+		isOpen = *input.IsOpen
+	}
+
+	allowLate := true
+	if input.AllowLate != nil {
+		allowLate = *input.AllowLate
+	}
+
+	wl := models.Workload{
+		SemesterID:     semesterID,
+		Title:          input.Title,
+		Description:    input.Description,
+		Deadline:       input.Deadline,
+		MaxScore:       input.MaxScore,
+		SampleFilePath: input.SampleFilePath,
+		SampleLinkURL:  input.SampleLinkURL,
+		Type:           wlType,
+		IsOpen:         isOpen,
+		AllowLate:      allowLate,
+		CreatedAt:      time.Now(),
+	}
+
+	if err := config.DB.Create(&wl).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
 	return c.JSON(wl)
@@ -632,23 +888,46 @@ func UpdateWorkload(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Workload not found"})
 	}
 
-	updated := new(models.Workload)
-	if err := c.BodyParser(updated); err != nil {
+	input := new(WorkloadInput)
+	if err := c.BodyParser(input); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	wl.Title = updated.Title
-	wl.Description = updated.Description
-	wl.Deadline = updated.Deadline
-	wl.MaxScore = updated.MaxScore
-	wl.SampleFilePath = updated.SampleFilePath
-	wl.SampleLinkURL = updated.SampleLinkURL
-	if updated.Type != "" {
-		wl.Type = updated.Type
+	wl.Title = input.Title
+	wl.Description = input.Description
+	if !input.Deadline.IsZero() {
+		wl.Deadline = input.Deadline
+	}
+	wl.MaxScore = input.MaxScore
+	wl.SampleFilePath = input.SampleFilePath
+	wl.SampleLinkURL = input.SampleLinkURL
+	if input.Type != "" {
+		wl.Type = input.Type
+	}
+	if input.IsOpen != nil {
+		wl.IsOpen = *input.IsOpen
+	}
+	if input.AllowLate != nil {
+		wl.AllowLate = *input.AllowLate
 	}
 
 	config.DB.Save(&wl)
 	return c.JSON(wl)
+}
+
+func ToggleWorkloadOpen(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var wl models.Workload
+	if err := config.DB.First(&wl, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Workload not found"})
+	}
+
+	wl.IsOpen = !wl.IsOpen
+	if err := config.DB.Save(&wl).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"status": "success", "is_open": wl.IsOpen, "workload": wl})
 }
 
 func DeleteWorkload(c *fiber.Ctx) error {

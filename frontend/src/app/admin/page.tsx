@@ -17,7 +17,7 @@ import ExportScoreDialog from "../../components/ExportScoreDialog";
 import { 
   Calendar, Layers, Users, User as UserIcon, Briefcase, Award, Settings, 
   Plus, Edit, Trash, Upload, Check, X, ShieldAlert, Download, FileSpreadsheet, LayoutGrid,
-  Image as ImageIcon, Link as LinkIcon, ExternalLink, Printer
+  Image as ImageIcon, Link as LinkIcon, ExternalLink, Printer, Copy
 } from "lucide-react";
 
 export default function AdminPage() {
@@ -67,12 +67,25 @@ export default function AdminPage() {
 
   // Dialog States
   const [openSemDialog, setOpenSemDialog] = useState(false);
+  const [openCloneDialog, setOpenCloneDialog] = useState(false);
   const [openClassDialog, setOpenClassDialog] = useState(false);
   const [openAssignTeacherDialog, setOpenAssignTeacherDialog] = useState(false);
   const [openUserDialog, setOpenUserDialog] = useState(false);
   const [openImportUserDialog, setOpenImportUserDialog] = useState(false);
   const [openWorkloadDialog, setOpenWorkloadDialog] = useState(false);
   const [openCriteriaDialog, setOpenCriteriaDialog] = useState(false);
+
+  // Clone Semester State
+  const [cloneForm, setCloneForm] = useState({
+    source_semester_id: "",
+    target_semester_id: "",
+    clone_classrooms: true,
+    clone_teachers: true,
+    clone_workloads: true,
+    clone_criteria: true,
+  });
+  const [isCloning, setIsCloning] = useState(false);
+  const [userSemesterFilter, setUserSemesterFilter] = useState<string>("all");
 
   // Selected for Edit
   const [editingSem, setEditingSem] = useState<Semester | null>(null);
@@ -101,7 +114,9 @@ export default function AdminPage() {
     semester_id: 0,
     sample_file_path: "",
     sample_link_url: "",
-    type: "group" as "individual" | "group"
+    type: "group" as "individual" | "group",
+    is_open: true,
+    allow_late: true
   });
   const [uploadingSampleFile, setUploadingSampleFile] = useState(false);
   // 5. Criteria
@@ -141,9 +156,13 @@ export default function AdminPage() {
         const resTeach = await apiRequest<User[]>("/admin/users?role=teacher");
         setTeachers(resTeach);
       } else if (activeTab === "users") {
-        const resUsers = await apiRequest<User[]>("/admin/users");
+        const userSemQuery = userSemesterFilter && userSemesterFilter !== "all" ? `?semester_id=${userSemesterFilter}` : "";
+        const resUsers = await apiRequest<User[]>(`/admin/users${userSemQuery}`);
         setUsers(resUsers);
-        const resClass = await apiRequest<Classroom[]>(`/admin/classrooms${semQuery}`);
+        const resSem = await apiRequest<Semester[]>("/admin/semesters");
+        setSemesters(resSem);
+        const classSemQuery = userSemesterFilter && userSemesterFilter !== "all" ? `?semester_id=${userSemesterFilter}` : semQuery;
+        const resClass = await apiRequest<Classroom[]>(`/admin/classrooms${classSemQuery}`);
         setClassrooms(resClass);
       } else if (activeTab === "workloads") {
         const res = await apiRequest<Workload[]>(`/admin/workloads${semQuery}`);
@@ -291,6 +310,72 @@ export default function AdminPage() {
     }
   };
 
+  // CLONE SEMESTER FUNCTION
+  const handleCloneSemesterSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cloneForm.source_semester_id || !cloneForm.target_semester_id) {
+      toast.error("กรุณาเลือกภาคเรียนต้นทางและภาคเรียนปลายทาง");
+      return;
+    }
+    if (cloneForm.source_semester_id === cloneForm.target_semester_id) {
+      toast.error("ภาคเรียนต้นทางและภาคเรียนปลายทางต้องไม่เป็นภาคเรียนเดียวกัน");
+      return;
+    }
+    if (
+      !cloneForm.clone_classrooms &&
+      !cloneForm.clone_workloads &&
+      !cloneForm.clone_criteria
+    ) {
+      toast.error("กรุณาเลือกอย่างน้อย 1 รายการที่ต้องการคัดลอก");
+      return;
+    }
+
+    try {
+      setIsCloning(true);
+      const res = await apiRequest<{
+        status: string;
+        message: string;
+        cloned_classrooms: number;
+        cloned_workloads: number;
+        cloned_criteria: number;
+      }>(`/admin/semesters/${cloneForm.target_semester_id}/clone`, "POST", {
+        source_semester_id: parseInt(cloneForm.source_semester_id),
+        clone_classrooms: cloneForm.clone_classrooms,
+        clone_teachers: cloneForm.clone_teachers,
+        clone_workloads: cloneForm.clone_workloads,
+        clone_criteria: cloneForm.clone_criteria,
+      });
+
+      toast.success(
+        `คัดลอกโครงสร้างสำเร็จ! (ห้องเรียน: ${res.cloned_classrooms}, ภาระงาน: ${res.cloned_workloads}, เกณฑ์ Final: ${res.cloned_criteria})`
+      );
+      setOpenCloneDialog(false);
+      fetchData();
+    } catch (err: any) {
+      toast.error("คัดลอกโครงสร้างล้มเหลว: " + err.message);
+    } finally {
+      setIsCloning(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "users" && user?.role === "admin") {
+      const fetchUsersFiltered = async () => {
+        try {
+          const userSemQuery = userSemesterFilter && userSemesterFilter !== "all" ? `?semester_id=${userSemesterFilter}` : "";
+          const resUsers = await apiRequest<User[]>(`/admin/users${userSemQuery}`);
+          setUsers(resUsers);
+          const resClass = await apiRequest<Classroom[]>(`/admin/classrooms${userSemQuery}`);
+          setClassrooms(resClass);
+        } catch (err: any) {
+          console.error("Failed to load users:", err);
+        }
+      };
+      fetchUsersFiltered();
+      setUserPage(1);
+    }
+  }, [userSemesterFilter]);
+
   // CLASSROOM FUNCTIONS
   const handleClassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -402,8 +487,22 @@ export default function AdminPage() {
       const formData = new FormData();
       formData.append("file", importFile);
 
-      const res = await apiRequest("/admin/users/import", "POST", formData);
-      toast.success(`นำเข้าผู้ใช้สำเร็จจำนวน ${res.imported} บัญชี`);
+      const targetSem = (userSemesterFilter && userSemesterFilter !== "all") 
+        ? `?semester_id=${userSemesterFilter}` 
+        : (selectedSemester ? `?semester_id=${selectedSemester}` : "");
+
+      const res = await apiRequest<{
+        status: string;
+        imported: number;
+        created?: number;
+        updated?: number;
+      }>(`/admin/users/import${targetSem}`, "POST", formData);
+
+      const detailMsg = (res.updated !== undefined && res.updated > 0)
+        ? `นำเข้าสำเร็จทั้งหมด ${res.imported} รายการ (สร้างใหม่ ${res.created || 0} บัญชี, อัปเดตห้องเรียน/ข้อมูล ${res.updated} บัญชี)`
+        : `นำเข้าผู้ใช้สำเร็จจำนวน ${res.imported} บัญชี`;
+
+      toast.success(detailMsg);
       setOpenImportUserDialog(false);
       setImportFile(null);
       fetchData();
@@ -459,6 +558,16 @@ export default function AdminPage() {
       fetchData();
     } catch (err: any) {
       toast.error(err.message);
+    }
+  };
+
+  const handleToggleWorkloadOpen = async (id: number) => {
+    try {
+      const res = await apiRequest<{ message: string; is_open: boolean }>(`/admin/workloads/${id}/toggle-open`, "PUT");
+      toast.success(res.message || "ปรับเปลี่ยนสถานะการรับส่งสำเร็จ");
+      fetchData();
+    } catch (err: any) {
+      toast.error(err.message || "เกิดข้อผิดพลาดในการปรับเปลี่ยนสถานะ");
     }
   };
 
@@ -946,16 +1055,37 @@ export default function AdminPage() {
                     <CardTitle className="text-lg font-bold">ตั้งค่าปีการศึกษาและภาคเรียน</CardTitle>
                     <CardDescription className="text-slate-500 text-xs">ระบุช่วงเวลาภาคเรียนปัจจุบันที่เปิดให้นักเรียนส่งงาน</CardDescription>
                   </div>
-                  <Button 
-                    onClick={() => {
-                      setEditingSem(null);
-                      setSemForm({ year: 2569, term: 1, is_active: false });
-                      setOpenSemDialog(true);
-                    }}
-                    className="bg-primary hover:bg-primary/90 text-white gap-1 transition-colors duration-200 cursor-pointer"
-                  >
-                    <Plus className="h-4 w-4" /> สร้างภาคเรียน
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button 
+                      variant="outline"
+                      onClick={() => {
+                        const active = semesters.find(s => s.is_active);
+                        const nonActive = semesters.filter(s => !s.is_active);
+                        setCloneForm({
+                          source_semester_id: nonActive.length > 0 ? nonActive[0].id.toString() : (semesters[0]?.id.toString() || ""),
+                          target_semester_id: active ? active.id.toString() : (selectedSemester || (semesters[0]?.id.toString() || "")),
+                          clone_classrooms: true,
+                          clone_teachers: true,
+                          clone_workloads: true,
+                          clone_criteria: true,
+                        });
+                        setOpenCloneDialog(true);
+                      }}
+                      className="border-slate-200 hover:bg-slate-100 text-slate-700 gap-1.5 cursor-pointer text-xs"
+                    >
+                      <Copy className="h-4 w-4 text-primary" /> คัดลอกโครงสร้างจากเทอมอื่น
+                    </Button>
+                    <Button 
+                      onClick={() => {
+                        setEditingSem(null);
+                        setSemForm({ year: 2569, term: 1, is_active: false });
+                        setOpenSemDialog(true);
+                      }}
+                      className="bg-primary hover:bg-primary/90 text-white gap-1 transition-colors duration-200 cursor-pointer text-xs"
+                    >
+                      <Plus className="h-4 w-4" /> สร้างภาคเรียน
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className="pt-6">
                   <div className="mb-4 max-w-sm">
@@ -1194,7 +1324,7 @@ export default function AdminPage() {
                   </div>
                 </CardHeader>
                 <CardContent className="pt-6">
-                  <div className="mb-4 flex flex-col sm:flex-row gap-4 max-w-xl">
+                  <div className="mb-4 flex flex-col sm:flex-row gap-4 max-w-2xl">
                     <div className="flex-1">
                       <Input
                         placeholder="ค้นหาชื่อผู้ใช้, ชื่อ-นามสกุล, สิทธิ์, อีเมล..."
@@ -1202,6 +1332,33 @@ export default function AdminPage() {
                         onChange={(e) => setUserSearch(e.target.value)}
                         className="bg-slate-50 border-slate-100 text-slate-800"
                       />
+                    </div>
+                    <div className="w-52">
+                      <Select 
+                        value={userSemesterFilter} 
+                        onValueChange={(val) => {
+                          setUserSemesterFilter(val || "all");
+                          setSelectedClassroomFilter("all");
+                        }}
+                      >
+                        <SelectTrigger className="bg-slate-50 border-slate-100">
+                          <SelectValue placeholder="กรองตามปีการศึกษา...">
+                            {(val) => {
+                              if (!val || val === "all") return "ทุกปีการศึกษา";
+                              const sem = semesters.find(s => s.id.toString() === val);
+                              return sem ? `เทอม ${sem.term}/${sem.year}${sem.is_active ? " (ปัจจุบัน)" : ""}` : val;
+                            }}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent className="bg-white border-slate-200 text-slate-800">
+                          <SelectItem value="all">ทุกปีการศึกษา</SelectItem>
+                          {semesters.map(s => (
+                            <SelectItem key={s.id} value={s.id.toString()}>
+                              เทอม {s.term}/{s.year} {s.is_active ? "(ปัจจุบัน)" : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="w-48">
                       <Select 
@@ -1343,7 +1500,9 @@ export default function AdminPage() {
                         semester_id: currentViewingSem ? currentViewingSem.id : 0,
                         sample_file_path: "",
                         sample_link_url: "",
-                        type: "group"
+                        type: "group",
+                        is_open: true,
+                        allow_late: true
                       });
                       setOpenWorkloadDialog(true);
                     }}
@@ -1367,6 +1526,7 @@ export default function AdminPage() {
                         <TableHead className="text-slate-500">หัวข้อภาระงาน</TableHead>
                         <TableHead className="text-slate-500">คำอธิบาย</TableHead>
                         <TableHead className="text-slate-500">กำหนดส่ง (Deadline)</TableHead>
+                        <TableHead className="text-slate-500">สถานะการรับส่ง</TableHead>
                         <TableHead className="text-slate-500">คะแนนเต็ม</TableHead>
                         <TableHead className="text-slate-500 text-right">เครื่องมือ</TableHead>
                       </TableRow>
@@ -1383,7 +1543,7 @@ export default function AdminPage() {
                         if (filteredWorkloads.length === 0) {
                           return (
                             <TableRow>
-                              <TableCell colSpan={5} className="text-center py-6 text-slate-500 italic">ไม่พบข้อมูลภาระงาน</TableCell>
+                              <TableCell colSpan={6} className="text-center py-6 text-slate-500 italic">ไม่พบข้อมูลภาระงาน</TableCell>
                             </TableRow>
                           );
                         }
@@ -1436,6 +1596,26 @@ export default function AdminPage() {
                             <TableCell className="text-rose-700 text-sm font-medium">
                               {new Date(wl.deadline).toLocaleString("th-TH")}
                             </TableCell>
+                            <TableCell>
+                              <div className="flex flex-col gap-1 items-start">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleWorkloadOpen(wl.id)}
+                                  className={`px-2.5 py-1 text-[11px] font-semibold rounded-full border flex items-center gap-1.5 transition-colors cursor-pointer ${
+                                    wl.is_open !== false
+                                      ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                                      : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+                                  }`}
+                                  title="คลิกเพื่อสลับ เปิด/ปิด รับส่งงาน"
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full ${wl.is_open !== false ? "bg-emerald-500" : "bg-rose-500"}`} />
+                                  {wl.is_open !== false ? "เปิดรับส่ง" : "ปิดรับส่ง"}
+                                </button>
+                                <span className="text-[10px] text-slate-400">
+                                  {wl.allow_late !== false ? "อนุญาตส่งล่าช้า" : "ไม่อนุญาตส่งล่าช้า"}
+                                </span>
+                              </div>
+                            </TableCell>
                             <TableCell>{wl.max_score} คะแนน</TableCell>
                             <TableCell className="text-right flex items-center justify-end gap-2">
                               <Button 
@@ -1451,7 +1631,9 @@ export default function AdminPage() {
                                     semester_id: wl.semester_id,
                                     sample_file_path: wl.sample_file_path || "",
                                     sample_link_url: wl.sample_link_url || "",
-                                    type: wl.type || "group"
+                                    type: wl.type || "group",
+                                    is_open: wl.is_open !== false,
+                                    allow_late: wl.allow_late !== false
                                   });
                                   setOpenWorkloadDialog(true);
                                 }}
@@ -2209,6 +2391,146 @@ export default function AdminPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Clone Previous Semester Dialog */}
+      <Dialog open={openCloneDialog} onOpenChange={setOpenCloneDialog}>
+        <DialogContent className="bg-white border-slate-200 text-slate-800 shadow-md rounded-2xl max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Copy className="h-5 w-5 text-primary" />
+              <span>คัดลอกโครงสร้างจากภาคเรียนอื่น</span>
+            </DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleCloneSemesterSubmit} className="space-y-4 pt-2">
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-500 font-medium">ภาคเรียนต้นทาง (Source Semester)*</label>
+              <Select
+                value={cloneForm.source_semester_id}
+                onValueChange={(val) => setCloneForm({ ...cloneForm, source_semester_id: val || "" })}
+              >
+                <SelectTrigger className="bg-slate-50 border-slate-200">
+                  <SelectValue placeholder="เลือกภาคเรียนต้นทาง...">
+                    {(val) => {
+                      const sem = semesters.find(s => s.id.toString() === val);
+                      return sem ? `ปีการศึกษา ${sem.year} ภาคเรียนที่ ${sem.term} ${sem.is_active ? "(ใช้งานอยู่)" : ""}` : val;
+                    }}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent className="bg-white border-slate-200 text-slate-800">
+                  {semesters.map(s => (
+                    <SelectItem key={s.id} value={s.id.toString()}>
+                      ปีการศึกษา {s.year} ภาคเรียนที่ {s.term} {s.is_active ? "(ใช้งานอยู่)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-500 font-medium">ภาคเรียนปลายทาง (Target Semester)*</label>
+              <Select
+                value={cloneForm.target_semester_id}
+                onValueChange={(val) => setCloneForm({ ...cloneForm, target_semester_id: val || "" })}
+              >
+                <SelectTrigger className="bg-slate-50 border-slate-200">
+                  <SelectValue placeholder="เลือกภาคเรียนปลายทาง...">
+                    {(val) => {
+                      const sem = semesters.find(s => s.id.toString() === val);
+                      return sem ? `ปีการศึกษา ${sem.year} ภาคเรียนที่ ${sem.term} ${sem.is_active ? "(ใช้งานอยู่)" : ""}` : val;
+                    }}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent className="bg-white border-slate-200 text-slate-800">
+                  {semesters.map(s => (
+                    <SelectItem key={s.id} value={s.id.toString()}>
+                      ปีการศึกษา {s.year} ภาคเรียนที่ {s.term} {s.is_active ? "(ใช้งานอยู่)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="pt-2 border-t border-slate-100 space-y-2.5">
+              <label className="text-xs text-slate-700 font-semibold block">เลือกข้อมูลที่ต้องการคัดลอก:</label>
+              
+              <div className="flex items-center gap-2.5 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                <input
+                  type="checkbox"
+                  id="clone_classrooms"
+                  checked={cloneForm.clone_classrooms}
+                  onChange={(e) => setCloneForm({ ...cloneForm, clone_classrooms: e.target.checked })}
+                  className="rounded text-primary focus:ring-primary h-4 w-4"
+                />
+                <label htmlFor="clone_classrooms" className="text-xs text-slate-700 cursor-pointer">
+                  <span className="font-semibold">ห้องเรียน (Classrooms)</span>
+                  <span className="text-slate-500 block text-[11px]">คัดลอกรายชื่อห้องเรียนทั้งหมด เช่น ม.4/1, ม.4/2 ...</span>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-2.5 bg-slate-50 p-2.5 rounded-lg border border-slate-100 ml-4">
+                <input
+                  type="checkbox"
+                  id="clone_teachers"
+                  disabled={!cloneForm.clone_classrooms}
+                  checked={cloneForm.clone_teachers && cloneForm.clone_classrooms}
+                  onChange={(e) => setCloneForm({ ...cloneForm, clone_teachers: e.target.checked })}
+                  className="rounded text-primary focus:ring-primary h-4 w-4 disabled:opacity-50"
+                />
+                <label htmlFor="clone_teachers" className="text-xs text-slate-700 cursor-pointer">
+                  <span className="font-semibold">ครูผู้สอนประจำห้อง (Teachers Assignment)</span>
+                  <span className="text-slate-500 block text-[11px]">มอบหมายครูผู้สอนท่านเดิมให้ประจำห้องเรียนใหม่อัตโนมัติ</span>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-2.5 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                <input
+                  type="checkbox"
+                  id="clone_workloads"
+                  checked={cloneForm.clone_workloads}
+                  onChange={(e) => setCloneForm({ ...cloneForm, clone_workloads: e.target.checked })}
+                  className="rounded text-primary focus:ring-primary h-4 w-4"
+                />
+                <label htmlFor="clone_workloads" className="text-xs text-slate-700 cursor-pointer">
+                  <span className="font-semibold">ภาระงานย่อย (Workloads)</span>
+                  <span className="text-slate-500 block text-[11px]">คัดลอกหัวข้องาน คำอธิบาย คะแนนเต็ม และไฟล์ตัวอย่าง (ตั้ง Deadline เริ่มต้น 30 วัน)</span>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-2.5 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                <input
+                  type="checkbox"
+                  id="clone_criteria"
+                  checked={cloneForm.clone_criteria}
+                  onChange={(e) => setCloneForm({ ...cloneForm, clone_criteria: e.target.checked })}
+                  className="rounded text-primary focus:ring-primary h-4 w-4"
+                />
+                <label htmlFor="clone_criteria" className="text-xs text-slate-700 cursor-pointer">
+                  <span className="font-semibold">เกณฑ์ประเมิน Final Project (Criteria)</span>
+                  <span className="text-slate-500 block text-[11px]">คัดลอกเกณฑ์ประเมิน คะแนนเต็ม และน้ำหนัก % ทั้งหมด</span>
+                </label>
+              </div>
+            </div>
+
+            <DialogFooter className="mt-4 pt-2 border-t border-slate-100">
+              <Button type="button" variant="outline" onClick={() => setOpenCloneDialog(false)} className="border-slate-100 text-slate-500" disabled={isCloning}>
+                ยกเลิก
+              </Button>
+              <Button type="submit" className="bg-primary hover:bg-primary/90 transition-colors duration-200 cursor-pointer gap-1.5" disabled={isCloning}>
+                {isCloning ? (
+                  <>
+                    <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white"></div>
+                    กำลังคัดลอก...
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-4 w-4" /> เริ่มคัดลอกโครงสร้าง
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       {/* Classroom Dialog */}
       <Dialog open={openClassDialog} onOpenChange={(open) => { setOpenClassDialog(open); if (!open) setEditingClassroom(null); }}>
         <DialogContent className="bg-white border-slate-200 text-slate-800 shadow-md rounded-2xl">
@@ -2617,6 +2939,37 @@ export default function AdminPage() {
                 </p>
               )}
             </div>
+
+            <div className="space-y-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+              <label className="text-xs font-semibold text-slate-700 block">การควบคุมการส่งงาน (Submission Control)</label>
+              
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-medium text-slate-700">เปิดรับการส่งงาน (Open for submission)</div>
+                  <div className="text-[11px] text-slate-500">หากปิด นักเรียนจะไม่สามารถส่งหรือแก้ไขงานชิ้นนี้ได้</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={workloadForm.is_open}
+                  onChange={(e) => setWorkloadForm({ ...workloadForm, is_open: e.target.checked })}
+                  className="w-4 h-4 rounded text-primary focus:ring-primary cursor-pointer"
+                />
+              </div>
+
+              <div className="flex items-center justify-between border-t border-slate-200 pt-2">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-medium text-slate-700">อนุญาตให้ส่งงานหลังกำหนด (Allow late submission)</div>
+                  <div className="text-[11px] text-slate-500">หากปิด ระบบจะล็อกไม่ให้ส่งเมื่อเลยวันครบกำหนด (Deadline)</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={workloadForm.allow_late}
+                  onChange={(e) => setWorkloadForm({ ...workloadForm, allow_late: e.target.checked })}
+                  className="w-4 h-4 rounded text-primary focus:ring-primary cursor-pointer"
+                />
+              </div>
+            </div>
+
             <DialogFooter className="mt-4">
               <Button type="button" variant="outline" onClick={() => setOpenWorkloadDialog(false)} className="border-slate-100 text-slate-500">ยกเลิก</Button>
               <Button type="submit" className="bg-primary hover:bg-primary/90 transition-colors duration-200 cursor-pointer">บันทึกภาระงาน</Button>

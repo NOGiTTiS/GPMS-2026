@@ -59,6 +59,12 @@ func CreateGroup(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "You are not registered as a student"})
 	}
 
+	// Verify that student's classroom belongs to the active semester
+	var classroom models.Classroom
+	if err := config.DB.Where("id = ? AND semester_id = ?", student.ClassroomID, semesterID).First(&classroom).Error; err != nil {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "คุณไม่ได้ลงทะเบียนในห้องเรียนของภาคเรียนปัจจุบัน"})
+	}
+
 	// Check if already in a group
 	existingGroup, _ := getStudentGroup(userID, semesterID)
 	if existingGroup != nil {
@@ -439,8 +445,18 @@ func SubmitWorkload(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Workload not found"})
 	}
 
+	// Check if workload is open for submission
+	if !wl.IsOpen {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "ภาระงานนี้ปิดรับการส่งงานแล้ว"})
+	}
+
 	// Determine if late
 	isLate := time.Now().After(wl.Deadline)
+	if isLate && !wl.AllowLate {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fmt.Sprintf("หมดเวลากำหนดส่งภาระงานนี้แล้ว (สิ้นสุดเมื่อ %s น.) และไม่อนุญาตให้ส่งล่าช้า", wl.Deadline.Format("02/01/2006 15:04")),
+		})
+	}
 
 	var user models.User
 	config.DB.First(&user, userID)

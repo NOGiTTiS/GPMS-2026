@@ -62,6 +62,7 @@ func SetupRoutes(app *fiber.App) {
 	
 	// Semesters
 	admin.Post("/admin/semesters", controllers.CreateSemester)
+	admin.Post("/admin/semesters/:id/clone", controllers.CloneSemesterStructure)
 	admin.Put("/admin/semesters/:id", controllers.UpdateSemester)
 	admin.Delete("/admin/semesters/:id", controllers.DeleteSemester)
 
@@ -85,6 +86,7 @@ func SetupRoutes(app *fiber.App) {
 	// Workloads
 	admin.Post("/admin/workloads", controllers.CreateWorkload)
 	admin.Put("/admin/workloads/:id", controllers.UpdateWorkload)
+	admin.Put("/admin/workloads/:id/toggle-open", controllers.ToggleWorkloadOpen)
 	admin.Delete("/admin/workloads/:id", controllers.DeleteWorkload)
 
 	// Criteria

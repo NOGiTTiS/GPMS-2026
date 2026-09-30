@@ -352,6 +352,15 @@ export default function StudentPage() {
     e.preventDefault();
     if (!selectedWorkload) return;
 
+    if (selectedWorkload.is_open === false) {
+      toast.error("ภาระงานนี้ถูกปิดรับการส่งงานแล้ว");
+      return;
+    }
+    if (new Date(selectedWorkload.deadline) < new Date() && selectedWorkload.allow_late === false) {
+      toast.error("ภาระงานนี้หมดเวลาส่งงานแล้ว และไม่อนุญาตให้ส่งล่าช้า");
+      return;
+    }
+
     try {
       let filePath = "";
       let linkUrl = "";
@@ -930,6 +939,9 @@ export default function StudentPage() {
                         {filteredWorkloads.map((wl) => {
                           const sub = getWorkloadSubmission(wl);
                           const isIndiv = wl.type === "individual";
+                          const isClosed = wl.is_open === false;
+                          const isExpired = new Date(wl.deadline) < new Date() && wl.allow_late === false;
+                          const isLocked = isClosed || isExpired;
                           
                           return (
                             <TableRow key={wl.id} className="border-slate-100 hover:bg-slate-50/30">
@@ -1054,7 +1066,12 @@ export default function StudentPage() {
                                 </div>
                               </TableCell>
                               <TableCell className="text-slate-500 text-xs">
-                                {new Date(wl.deadline).toLocaleString("th-TH")}
+                                <div>{new Date(wl.deadline).toLocaleString("th-TH")}</div>
+                                {wl.allow_late === false && (
+                                  <span className="text-[10px] text-rose-500 font-medium block">
+                                    (ไม่อนุญาตส่งล่าช้า)
+                                  </span>
+                                )}
                               </TableCell>
                               <TableCell>
                                 {sub ? (
@@ -1066,6 +1083,16 @@ export default function StudentPage() {
                                       <span className="text-[9px] bg-rose-50 text-rose-700 px-2 py-0.5 border border-rose-200 rounded w-max font-semibold">ส่งเลท</span>
                                     )}
                                   </div>
+                                ) : isClosed ? (
+                                  <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 border border-slate-200 rounded-full font-semibold flex items-center gap-1 w-max">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                                    ปิดรับส่งแล้ว
+                                  </span>
+                                ) : isExpired ? (
+                                  <span className="text-[11px] bg-rose-50 text-rose-700 px-2 py-0.5 border border-rose-200 rounded-full font-semibold flex items-center gap-1 w-max">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                    หมดเวลาส่ง
+                                  </span>
                                 ) : !isIndiv && !groupData ? (
                                   <span className="text-xs text-amber-600 font-medium italic">ยังไม่มีกลุ่ม</span>
                                 ) : (
@@ -1110,24 +1137,35 @@ export default function StudentPage() {
                                 )}
                               </TableCell>
                               <TableCell className="text-right">
-                                <Button
-                                  size="sm"
-                                  onClick={() => {
-                                    if (!isIndiv && !groupData) {
-                                      toast.error("ภาระงานนี้เป็นงานกลุ่ม กรุณาจัดตั้งหรือเข้าร่วมกลุ่มก่อนส่งงาน");
-                                      setActiveTab("group");
-                                      return;
-                                    }
-                                    setSelectedWorkload(wl);
-                                    setSubmissionLink(sub?.link_url || "");
-                                    setSubmissionType(sub?.file_path ? "file" : "link");
-                                    setSubmissionFile(null);
-                                    setOpenSubmitDialog(true);
-                                  }}
-                                  className="bg-primary hover:bg-primary/90 transition-colors duration-200 cursor-pointer text-white font-semibold"
-                                >
-                                  {sub ? "แก้ไขการส่ง" : "ส่งงาน"}
-                                </Button>
+                                {isLocked ? (
+                                  <Button
+                                    size="sm"
+                                    disabled
+                                    className="bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed font-medium text-xs shadow-none hover:bg-slate-100"
+                                    title={isClosed ? "ปิดรับการส่งงานแล้ว" : "เลยกำหนดส่งแล้วและไม่อนุญาตให้ส่งล่าช้า"}
+                                  >
+                                    {isClosed ? "🔒 ปิดรับส่ง" : "⌛ หมดเวลา"}
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => {
+                                      if (!isIndiv && !groupData) {
+                                        toast.error("ภาระงานนี้เป็นงานกลุ่ม กรุณาจัดตั้งหรือเข้าร่วมกลุ่มก่อนส่งงาน");
+                                        setActiveTab("group");
+                                        return;
+                                      }
+                                      setSelectedWorkload(wl);
+                                      setSubmissionLink(sub?.link_url || "");
+                                      setSubmissionType(sub?.file_path ? "file" : "link");
+                                      setSubmissionFile(null);
+                                      setOpenSubmitDialog(true);
+                                    }}
+                                    className="bg-primary hover:bg-primary/90 transition-colors duration-200 cursor-pointer text-white font-semibold"
+                                  >
+                                    {sub ? "แก้ไขการส่ง" : "ส่งงาน"}
+                                  </Button>
+                                )}
                               </TableCell>
                             </TableRow>
                           );
@@ -1510,9 +1548,17 @@ export default function StudentPage() {
                 <DialogTitle className="text-xl font-bold text-slate-900 mt-2">
                   {viewDetailWorkload.title}
                 </DialogTitle>
-                <DialogDescription className="text-xs text-slate-500 flex items-center gap-1.5 mt-1">
+                <DialogDescription className="text-xs text-slate-500 flex items-center gap-1.5 mt-1 flex-wrap">
                   <Calendar className="h-3.5 w-3.5 text-slate-400" />
-                  กำหนดส่ง: {new Date(viewDetailWorkload.deadline).toLocaleString("th-TH")}
+                  <span>กำหนดส่ง: {new Date(viewDetailWorkload.deadline).toLocaleString("th-TH")}</span>
+                  {viewDetailWorkload.allow_late === false && (
+                    <span className="text-rose-600 font-medium">(ไม่อนุญาตส่งล่าช้า)</span>
+                  )}
+                  {viewDetailWorkload.is_open === false && (
+                    <span className="text-rose-600 font-semibold bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                      🔒 ปิดรับการส่งแล้ว
+                    </span>
+                  )}
                 </DialogDescription>
               </DialogHeader>
 
@@ -1614,23 +1660,44 @@ export default function StudentPage() {
                 >
                   ปิด
                 </Button>
-                {(viewDetailWorkload.type === "individual" || groupData?.group) && (
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      const sub = getWorkloadSubmission(viewDetailWorkload);
-                      setSelectedWorkload(viewDetailWorkload);
-                      setSubmissionLink(sub?.link_url || "");
-                      setSubmissionType(sub?.file_path ? "file" : "link");
-                      setSubmissionFile(null);
-                      setOpenWorkloadDetailDialog(false);
-                      setOpenSubmitDialog(true);
-                    }}
-                    className="bg-primary hover:bg-primary/90 text-white font-semibold cursor-pointer"
-                  >
-                    {getWorkloadSubmission(viewDetailWorkload) ? "แก้ไขการส่งงาน" : "ส่งงานนี้"}
-                  </Button>
-                )}
+                {(() => {
+                  const isClosed = viewDetailWorkload.is_open === false;
+                  const isExpired = new Date(viewDetailWorkload.deadline) < new Date() && viewDetailWorkload.allow_late === false;
+                  const isLocked = isClosed || isExpired;
+
+                  if (isLocked) {
+                    return (
+                      <Button
+                        type="button"
+                        disabled
+                        className="bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed font-medium text-xs shadow-none"
+                      >
+                        {isClosed ? "🔒 ปิดรับการส่งงานแล้ว" : "⌛ หมดเวลาส่งงานแล้ว"}
+                      </Button>
+                    );
+                  }
+
+                  if (viewDetailWorkload.type === "individual" || groupData?.group) {
+                    return (
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          const sub = getWorkloadSubmission(viewDetailWorkload);
+                          setSelectedWorkload(viewDetailWorkload);
+                          setSubmissionLink(sub?.link_url || "");
+                          setSubmissionType(sub?.file_path ? "file" : "link");
+                          setSubmissionFile(null);
+                          setOpenWorkloadDetailDialog(false);
+                          setOpenSubmitDialog(true);
+                        }}
+                        className="bg-primary hover:bg-primary/90 text-white font-semibold cursor-pointer"
+                      >
+                        {getWorkloadSubmission(viewDetailWorkload) ? "แก้ไขการส่งงาน" : "ส่งงานนี้"}
+                      </Button>
+                    );
+                  }
+                  return null;
+                })()}
               </DialogFooter>
             </div>
           )}

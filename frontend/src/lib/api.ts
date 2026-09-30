@@ -43,6 +43,8 @@ export interface Workload {
   sample_file_path?: string;
   sample_link_url?: string;
   type?: "individual" | "group";
+  is_open?: boolean;
+  allow_late?: boolean;
 }
 
 export interface Submission {

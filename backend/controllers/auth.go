@@ -83,13 +83,27 @@ func GetProfile(c *fiber.Ctx) error {
 
 	// If user is a student, find classroom and group info
 	if user.Role == models.RoleStudent {
+		var activeSem models.Semester
+		var activeSemID uint
+		if err := config.DB.Where("is_active = ?", true).First(&activeSem).Error; err == nil {
+			activeSemID = activeSem.ID
+		}
+
 		var student models.Student
 		if err := config.DB.Preload("Classroom.Semester").Where("user_id = ?", user.ID).First(&student).Error; err == nil {
 			res["classroom"] = student.Classroom
 			
-			// Find group
+			// Find group for active semester
 			var groupMember models.GroupMember
-			if err := config.DB.Where("student_id = ?", user.ID).First(&groupMember).Error; err == nil {
+			query := config.DB.Table("group_members").
+				Joins("JOIN groups ON groups.id = group_members.group_id").
+				Where("group_members.student_id = ?", user.ID)
+
+			if activeSemID > 0 {
+				query = query.Where("groups.semester_id = ?", activeSemID)
+			}
+
+			if err := query.First(&groupMember).Error; err == nil {
 				var group models.Group
 				if err := config.DB.Preload("Members").First(&group, groupMember.GroupID).Error; err == nil {
 					res["group"] = group
